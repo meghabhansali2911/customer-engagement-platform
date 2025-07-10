@@ -1,0 +1,31 @@
+/* App.css */
+
+/* Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Set default font and background */
+body {
+  font-family: "Roboto", sans-serif;
+  background-color: #f0f2f5;
+  color: #333;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Scrollbar styling (optional) */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
