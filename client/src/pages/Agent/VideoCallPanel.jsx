@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Typography, Paper } from "@mui/material";
 import MeetingPage from "../OpenTok/MeetingPage";
 
-const VideoCallPanel = ({ activeCallId, sessionId }) => {
+const VideoCallPanel = ({ activeCallId, sessionId, onCallEnd }) => {
   return (
     <Paper
       elevation={3}
@@ -25,7 +25,11 @@ const VideoCallPanel = ({ activeCallId, sessionId }) => {
           overflow: "hidden", // Prevent overflow issues
         }}
       >
-        <MeetingPage sessionId={sessionId} activeCallId={activeCallId} />
+        <MeetingPage
+          sessionId={sessionId}
+          activeCallId={activeCallId}
+          onCallEnd={onCallEnd}
+        />
       </Box>
     </Paper>
   );
