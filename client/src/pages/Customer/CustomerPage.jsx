@@ -9,6 +9,11 @@ import {
   TextField,
   Typography,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from "@mui/material";
 
 // ⬇ Backend URL
@@ -27,8 +32,12 @@ const CustomerPage = () => {
   const [waitingForAgent, setWaitingForAgent] = useState(false);
   const [publisherHasVideo, setPublisherHasVideo] = useState(true);
   const [subscriberHasVideo, setSubscriberHasVideo] = useState(false);
+  const [receivedFile, setReceivedFile] = useState(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState(null);
+  const [fileUploadRequested, setFileUploadRequested] = useState(false);
 
   // ⬇ Refs
+  const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
@@ -243,6 +252,27 @@ const CustomerPage = () => {
       console.log("📡 Received signal:", event.type, event.data);
     };
 
+    const handleFileUpload = (event) => {
+      console.log("📡 Received signal:", event.type, event.data);
+
+      if (event.type === "signal:file-share") {
+        try {
+          const parsed = JSON.parse(event.data);
+          console.log("📎 Received file from agent:", parsed.name);
+
+          setReceivedFile(parsed);
+          setFilePreviewUrl(parsed.content);
+        } catch (err) {
+          console.error("❌ Failed to parse file signal:", err);
+        }
+      }
+
+      if (event.type === "signal:file-request") {
+        console.log("📥 Agent requested file upload");
+        setFileUploadRequested(true);
+      }
+    };
+
     const handleVideoAssist = (event) => {
       console.log("📡 Received video assist signal:", event.data);
 
@@ -261,6 +291,8 @@ const CustomerPage = () => {
     session.on("streamCreated", handleStreamCreated);
     session.on("signal:endCall", handleEndCall);
     session.on("signal:video-assist", handleVideoAssist);
+    session.on("signal:file-request", handleFileUpload);
+    session.on("signal:file-share", handleFileUpload);
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
     return () => {
@@ -495,6 +527,99 @@ const CustomerPage = () => {
               />
             </Box>
           )}
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files[0];
+              if (file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const session = sessionRef.current;
+                  if (!session) return;
+
+                  session.signal(
+                    {
+                      type: "file-share",
+                      data: JSON.stringify({
+                        name: file.name,
+                        content: reader.result, // base64
+                      }),
+                    },
+                    (err) => {
+                      if (err) {
+                        console.error("❌ File signal send error:", err);
+                      } else {
+                        console.log("📤 Sent file to agent");
+                      }
+                    }
+                  );
+                };
+                reader.readAsDataURL(file);
+              }
+            }}
+          />
+
+          {receivedFile && (
+            <Box sx={{ mt: 2, p: 1, bgcolor: "#222", borderRadius: 1 }}>
+              <Typography variant="subtitle1" color="white">
+                Received file: {receivedFile.name}
+              </Typography>
+              {filePreviewUrl && (
+                <Box sx={{ mt: 1 }}>
+                  <a
+                    href={filePreviewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "#90caf9" }}
+                  >
+                    View File
+                  </a>
+                </Box>
+              )}
+            </Box>
+          )}
+
+          {/* Dialog for file upload request */}
+          <Dialog
+            open={fileUploadRequested}
+            onClose={() => setFileUploadRequested(false)}
+            aria-labelledby="file-upload-dialog-title"
+            aria-describedby="file-upload-dialog-description"
+          >
+            <DialogTitle id="file-upload-dialog-title">
+              File Upload Requested
+            </DialogTitle>
+            <DialogContent>
+              <DialogContentText id="file-upload-dialog-description">
+                The agent has requested you to upload a PDF file. Please select
+                a file to share.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                onClick={() => setFileUploadRequested(false)}
+                color="secondary"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  fileInputRef.current?.click();
+                  setFileUploadRequested(false);
+                }}
+                variant="contained"
+                color="primary"
+                autoFocus
+              >
+                Upload File
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Box>
       </Paper>
     </Box>

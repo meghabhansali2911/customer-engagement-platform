@@ -27,6 +27,10 @@ import {
   Close as CloseIcon,
 } from "@mui/icons-material";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
+import { Document, Page, pdfjs } from "react-pdf";
+
+// Required for pdf.js to work correctly
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
@@ -38,7 +42,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
   const [localAudioOn, setLocalAudioOn] = useState(ENABLE_AGENT_AUDIO);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
-  const [uploadedFileUrl, setUploadedFileUrl] = useState(null);
   const [signingUrl, setSigningUrl] = useState(null);
   const [openModal, setOpenModal] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -46,7 +49,12 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [hasVideoInput, setHasVideoInput] = useState(false);
   const [hasAudioInput, setHasAudioInput] = useState(false);
   const [videoAssistActive, setVideoAssistActive] = useState(false);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadMode, setUploadMode] = useState("");
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
 
+  const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
@@ -263,37 +271,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     } catch (err) {
       console.error("Audio toggle failed:", err);
       setError("Failed to toggle audio");
-    }
-  };
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const res = await axios.post(`${backendUrl}/api/upload`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      const fileUrl = res.data.url;
-      setUploadedFileUrl(fileUrl);
-
-      sessionRef.current.signal(
-        {
-          type: "file-upload",
-          data: JSON.stringify({ fileUrl }),
-        },
-        (err) => {
-          if (err) console.error("Signal error:", err);
-        }
-      );
-
-      setOpenModal(true);
-    } catch (err) {
-      console.error("Upload error:", err);
-      setError("Failed to upload file");
     }
   };
 
@@ -524,13 +501,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
       <Tooltip title="Upload File">
         <IconButton component="label" sx={{ color: "white" }}>
-          <UploadFile />
-          <input
-            type="file"
-            hidden
-            onChange={handleFileUpload}
-            accept="image/*,.pdf"
-          />
+          <UploadFile onClick={() => setUploadDialogOpen(true)} />
         </IconButton>
       </Tooltip>
 
@@ -668,17 +639,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             overflowY: "auto",
           }}
         >
-          {uploadedFileUrl && (
-            <>
-              <Typography variant="h6" gutterBottom>
-                File Shared
-              </Typography>
-              <a href={uploadedFileUrl} target="_blank" rel="noreferrer">
-                {uploadedFileUrl}
-              </a>
-            </>
-          )}
-
           {signingUrl && (
             <>
               <Typography variant="h6" gutterBottom>
@@ -698,12 +658,113 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         </Box>
       </Modal>
 
+      <input
+        type="file"
+        accept="application/pdf"
+        ref={fileInputRef}
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files[0];
+          if (file) {
+            setSelectedFile(file);
+            setPdfUrl(URL.createObjectURL(file));
+          }
+        }}
+      />
+
+      {pdfUrl && (
+        <Box
+          sx={{
+            mt: 2,
+            bgcolor: "background.paper",
+            p: 2,
+            borderRadius: 2,
+            boxShadow: 3,
+            maxHeight: "70vh",
+            overflowY: "auto",
+          }}
+        >
+          <Typography variant="h6" gutterBottom>
+            PDF Preview: {selectedFile?.name}
+          </Typography>
+          <Document file={pdfUrl} onLoadError={console.error}>
+            <Page pageNumber={1} />
+          </Document>
+          <Button
+            variant="contained"
+            color="primary"
+            sx={{ mt: 2 }}
+            onClick={() => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                sessionRef.current?.signal(
+                  {
+                    type: "file-share",
+                    data: JSON.stringify({
+                      name: selectedFile.name,
+                      content: reader.result,
+                    }),
+                  },
+                  (err) => {
+                    if (err) console.error("Signal send error:", err);
+                  }
+                );
+              };
+              reader.readAsDataURL(selectedFile);
+            }}
+          >
+            Share with Customer
+          </Button>
+        </Box>
+      )}
+
+      <Dialog
+        open={uploadDialogOpen}
+        onClose={() => setUploadDialogOpen(false)}
+      >
+        <DialogTitle>Select Upload Type</DialogTitle>
+        <DialogContent>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setUploadMode("agent");
+              setUploadDialogOpen(false);
+              fileInputRef.current.click(); // trigger file picker
+            }}
+            sx={{ m: 1 }}
+          >
+            Agent Upload
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              setUploadMode("customer");
+              setUploadDialogOpen(false);
+              // Send OpenTok signal to customer
+              sessionRef.current?.signal(
+                {
+                  type: "file-request",
+                  data: "Please upload your file.",
+                },
+                (err) => {
+                  if (err) console.error("Signal error:", err);
+                }
+              );
+            }}
+            sx={{ m: 1 }}
+          >
+            Request Customer Upload
+          </Button>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setUploadDialogOpen(false)}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={!!error}
         onClose={handleCloseErrorDialog}
-        max
-        ChatGPT
-        said:Width="sm"
+        maxWidth="sm"
         fullWidth
       >
         <DialogTitle
