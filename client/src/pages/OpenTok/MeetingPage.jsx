@@ -134,6 +134,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                   setError("Failed to initialize publisher");
                 } else {
                   webcamPublisherRef.current = webcamPublisher;
+                  publisherRef.current = webcamPublisher;
 
                   session.publish(webcamPublisher, (pubErr2) => {
                     if (pubErr2) {
@@ -154,36 +155,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                 }
               }
             );
-
-            // const publisher = OT.initPublisher(
-            //   publisherRef.current,
-            //   publisherOptions,
-            //   (pubErr) => {
-            //     if (pubErr) {
-            //       console.error("Publisher init error:", pubErr);
-            //       setError("Failed to initialize publisher");
-            //     } else {
-            //       publisherRef.current = publisher;
-
-            //       session.publish(publisher, (pubErr) => {
-            //         if (pubErr) {
-            //           console.error("Publish error:", pubErr);
-            //           setError("Failed to publish stream");
-            //         }
-            //       });
-
-            //       session.signal(
-            //         {
-            //           type: "callAccepted",
-            //           data: "Agent accepted the call",
-            //         },
-            //         (err) => {
-            //           if (err) console.error("Signal error:", err);
-            //         }
-            //       );
-            //     }
-            //   }
-            // );
 
             webcamPublisher.on("streamCreated", (e) => {
               console.log("Publisher stream created:", e.stream);
@@ -265,21 +236,34 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   }, [sessionId, retryMedia]);
 
   const toggleVideo = async () => {
-    if (!publisherRef.current || !hasVideoInput) return;
+    const pub = webcamPublisherRef.current;
+    if (!pub || !hasVideoInput || isScreenSharing) return;
 
     if (!localVideoOn) {
       const granted = await ensureMediaAccess();
       if (!granted) return;
     }
 
-    publisherRef.current.publishVideo(!localVideoOn);
-    setLocalVideoOn(!localVideoOn);
+    try {
+      pub.publishVideo(!localVideoOn);
+      setLocalVideoOn(!localVideoOn);
+    } catch (err) {
+      console.error("Video toggle failed:", err);
+      setError("Failed to toggle video");
+    }
   };
 
   const toggleAudio = () => {
-    if (!publisherRef.current || !hasAudioInput) return;
-    publisherRef.current.publishAudio(!localAudioOn);
-    setLocalAudioOn(!localAudioOn);
+    const pub = webcamPublisherRef.current;
+    if (!pub || !hasAudioInput || isScreenSharing) return;
+
+    try {
+      pub.publishAudio(!localAudioOn);
+      setLocalAudioOn(!localAudioOn);
+    } catch (err) {
+      console.error("Audio toggle failed:", err);
+      setError("Failed to toggle audio");
+    }
   };
 
   const handleFileUpload = async (event) => {
@@ -502,7 +486,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <IconButton
             onClick={toggleVideo}
             sx={{ color: "white" }}
-            disabled={isScreenSharing || !hasVideoInput || !ENABLE_AGENT_VIDEO}
+            disabled={isScreenSharing || !hasVideoInput}
           >
             {localVideoOn ? <Videocam /> : <VideocamOff />}
           </IconButton>
@@ -514,7 +498,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <IconButton
             onClick={toggleAudio}
             sx={{ color: "white" }}
-            disabled={!hasAudioInput || !ENABLE_AGENT_AUDIO}
+            disabled={!hasAudioInput}
           >
             {localAudioOn ? <Mic /> : <MicOff />}
           </IconButton>
