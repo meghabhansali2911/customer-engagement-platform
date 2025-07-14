@@ -243,10 +243,24 @@ const CustomerPage = () => {
       console.log("📡 Received signal:", event.type, event.data);
     };
 
+    const handleVideoAssist = (event) => {
+      console.log("📡 Received video assist signal:", event.data);
+
+      const data = event.data;
+      if (data === "enable-video") {
+        console.log("📡 Received video assist signal enabled");
+        setSubscriberHasVideo(false);
+      } else {
+        console.log("📡 Received video assist signal disabled");
+        setSubscriberHasVideo(true);
+      }
+    };
+
     session.on("signal", signalHandler);
     session.on("signal:callAccepted", handleCallAccepted);
     session.on("streamCreated", handleStreamCreated);
     session.on("signal:endCall", handleEndCall);
+    session.on("signal:video-assist", handleVideoAssist);
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
     return () => {
@@ -426,7 +440,7 @@ const CustomerPage = () => {
         </Typography>
 
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          {/* Publisher */}
+          {/* Always show Publisher */}
           <Box
             sx={{
               flex: 1,
@@ -434,6 +448,7 @@ const CustomerPage = () => {
               borderRadius: 2,
               bgcolor: "#222",
               overflow: "hidden",
+              height: subscriberHasVideo ? "50%" : "100%", // dynamic height
             }}
           >
             {!publisherHasVideo && renderFallbackAvatar(name || "You")}
@@ -452,31 +467,34 @@ const CustomerPage = () => {
             />
           </Box>
 
-          {/* Subscriber */}
-          <Box
-            sx={{
-              flex: 1,
-              position: "relative",
-              borderRadius: 2,
-              bgcolor: "#333",
-              overflow: "hidden",
-            }}
-          >
-            {!subscriberHasVideo && renderFallbackAvatar("Agent")}
+          {/* Only show Subscriber if video exists */}
+          {subscriberHasVideo && (
             <Box
-              ref={subscriberRef}
               sx={{
-                width: "100%",
-                height: "100%",
-                "& video, & div": {
-                  width: "100% !important",
-                  height: "100% !important",
-                  objectFit: "cover",
-                  borderRadius: 2,
-                },
+                flex: 1,
+                position: "relative",
+                borderRadius: 2,
+                bgcolor: "#333",
+                overflow: "hidden",
+                height: "50%", // shared height
               }}
-            />
-          </Box>
+            >
+              {!subscriberHasVideo && renderFallbackAvatar("Agent")}
+              <Box
+                ref={subscriberRef}
+                sx={{
+                  width: "100%",
+                  height: "100%",
+                  "& video, & div": {
+                    width: "100% !important",
+                    height: "100% !important",
+                    objectFit: "cover",
+                    borderRadius: 2,
+                  },
+                }}
+              />
+            </Box>
+          )}
         </Box>
       </Paper>
     </Box>

@@ -26,12 +26,13 @@ import {
   CallEnd,
   Close as CloseIcon,
 } from "@mui/icons-material";
+import VideoFileIcon from "@mui/icons-material/VideoFile";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
 const ENABLE_AGENT_AUDIO = import.meta.env.VITE_AGENT_ENABLE_AUDIO === "true";
 
-const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
+const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [error, setError] = useState(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
@@ -44,11 +45,14 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
   const [retryMedia, setRetryMedia] = useState(false);
   const [hasVideoInput, setHasVideoInput] = useState(false);
   const [hasAudioInput, setHasAudioInput] = useState(false);
+  const [videoAssistActive, setVideoAssistActive] = useState(false);
 
   const sessionRef = useRef(null);
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
+  const webcamPublisherRef = useRef(null);
   const screenPublisherRef = useRef(null);
+  const publisherContainerRef = useRef(null);
 
   const ensureMediaAccess = async () => {
     try {
@@ -121,19 +125,19 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
               audio: ENABLE_AGENT_AUDIO && audioInput,
             };
 
-            const publisher = OT.initPublisher(
-              publisherRef.current,
+            const webcamPublisher = OT.initPublisher(
+              publisherContainerRef.current,
               publisherOptions,
               (pubErr) => {
                 if (pubErr) {
                   console.error("Publisher init error:", pubErr);
                   setError("Failed to initialize publisher");
                 } else {
-                  publisherRef.current = publisher;
+                  webcamPublisherRef.current = webcamPublisher;
 
-                  session.publish(publisher, (pubErr) => {
-                    if (pubErr) {
-                      console.error("Publish error:", pubErr);
+                  session.publish(webcamPublisher, (pubErr2) => {
+                    if (pubErr2) {
+                      console.error("Publish error:", pubErr2);
                       setError("Failed to publish stream");
                     }
                   });
@@ -151,7 +155,37 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
               }
             );
 
-            publisher.on("streamCreated", (e) => {
+            // const publisher = OT.initPublisher(
+            //   publisherRef.current,
+            //   publisherOptions,
+            //   (pubErr) => {
+            //     if (pubErr) {
+            //       console.error("Publisher init error:", pubErr);
+            //       setError("Failed to initialize publisher");
+            //     } else {
+            //       publisherRef.current = publisher;
+
+            //       session.publish(publisher, (pubErr) => {
+            //         if (pubErr) {
+            //           console.error("Publish error:", pubErr);
+            //           setError("Failed to publish stream");
+            //         }
+            //       });
+
+            //       session.signal(
+            //         {
+            //           type: "callAccepted",
+            //           data: "Agent accepted the call",
+            //         },
+            //         (err) => {
+            //           if (err) console.error("Signal error:", err);
+            //         }
+            //       );
+            //     }
+            //   }
+            // );
+
+            webcamPublisher.on("streamCreated", (e) => {
               console.log("Publisher stream created:", e.stream);
               setLocalVideoOn(e.stream.hasVideo);
             });
@@ -216,9 +250,9 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
     return () => {
       isMounted = false;
       if (sessionRef.current) {
-        if (screenPublisherRef.current) {
-          sessionRef.current.unpublish(screenPublisherRef.current);
-          screenPublisherRef.current.destroy();
+        if (publisherRef.current) {
+          sessionRef.current.unpublish(publisherRef.current);
+          publisherRef.current.destroy();
         }
         if (publisherRef.current) {
           sessionRef.current.unpublish(publisherRef.current);
@@ -307,55 +341,63 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
-      if (screenPublisherRef.current) {
+      // Stop screen sharing: unpublish screen, publish webcam
+      if (screenPublisherRef.current && sessionRef.current) {
         sessionRef.current.unpublish(screenPublisherRef.current);
         screenPublisherRef.current.destroy();
         screenPublisherRef.current = null;
       }
-      setIsScreenSharing(false);
-      if (publisherRef.current) {
-        sessionRef.current.publish(publisherRef.current);
+      if (webcamPublisherRef.current && sessionRef.current) {
+        sessionRef.current.publish(webcamPublisherRef.current);
       }
+      setIsScreenSharing(false);
     } else {
+      // Start screen sharing: unpublish webcam, publish screen
+      if (!sessionRef.current) return;
+
       try {
-        if (publisherRef.current) {
-          sessionRef.current.unpublish(publisherRef.current);
+        if (webcamPublisherRef.current) {
+          sessionRef.current.unpublish(webcamPublisherRef.current);
         }
 
         const screenPublisher = OT.initPublisher(
-          document.createElement("div"),
+          publisherContainerRef.current,
           {
             insertMode: "append",
             width: "100%",
             height: "100%",
             videoSource: "screen",
             audioSource: null,
+            publishAudio: false,
           },
           (err) => {
             if (err) {
               console.error("Screen publisher init error:", err);
               setError("Failed to initialize screen sharing");
-              if (publisherRef.current) {
-                sessionRef.current.publish(publisherRef.current);
+              if (webcamPublisherRef.current) {
+                sessionRef.current.publish(webcamPublisherRef.current);
               }
-            } else {
-              screenPublisherRef.current = screenPublisher;
-              sessionRef.current.publish(screenPublisher, (pubErr) => {
-                if (pubErr) {
-                  console.error("Screen publish error:", pubErr);
-                  setError("Failed to publish screen stream");
-                } else {
-                  setIsScreenSharing(true);
-                }
-              });
+              return;
             }
+            screenPublisherRef.current = screenPublisher;
+            sessionRef.current.publish(screenPublisher, (pubErr) => {
+              if (pubErr) {
+                console.error("Screen publish error:", pubErr);
+                setError("Failed to publish screen stream");
+                if (webcamPublisherRef.current) {
+                  sessionRef.current.publish(webcamPublisherRef.current);
+                }
+              } else {
+                setIsScreenSharing(true);
+              }
+            });
           }
         );
       } catch (err) {
         console.error("Screen sharing error:", err);
         setError("Could not start screen sharing");
-        if (publisherRef.current) {
-          sessionRef.current.publish(publisherRef.current);
+        if (webcamPublisherRef.current && sessionRef.current) {
+          sessionRef.current.publish(webcamPublisherRef.current);
         }
       }
     }
@@ -368,6 +410,29 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
 
   const handleCloseErrorDialog = () => {
     setError(null);
+  };
+
+  const handleVideoAssist = () => {
+    if (!sessionRef.current) return;
+
+    const nextState = !videoAssistActive;
+    sessionRef.current.signal(
+      {
+        type: "video-assist",
+        data: nextState ? "enable-video" : "disable-video",
+      },
+      (err) => {
+        if (err) {
+          console.error("Signal error:", err);
+          setError("Failed to send video assist signal");
+        } else {
+          setVideoAssistActive(nextState);
+          console.log(
+            `📡 Sent 'video-assist' signal: ${nextState ? "enable" : "disable"}`
+          );
+        }
+      }
+    );
   };
 
   const handleEndCall = async () => {
@@ -421,13 +486,15 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
         bottom: 16,
         left: "50%",
         transform: "translateX(-50%)",
-        bgcolor: "rgba(0,0,0,0.6)",
-        borderRadius: 4,
+        backdropFilter: "blur(10px)",
+        backgroundColor: "rgba(216, 216, 216, 0.6)",
+        borderRadius: 3,
+        border: "1px solid rgba(255, 255, 255, 0.1)",
         display: "flex",
         gap: 1,
         p: 1,
         zIndex: 9999,
-        boxShadow: "0 0 10px rgba(0,0,0,0.7)",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
       }}
     >
       <Tooltip title={localVideoOn ? "Turn off video" : "Turn on video"}>
@@ -450,6 +517,17 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
             disabled={!hasAudioInput || !ENABLE_AGENT_AUDIO}
           >
             {localAudioOn ? <Mic /> : <MicOff />}
+          </IconButton>
+        </span>
+      </Tooltip>
+
+      <Tooltip title="Enable Video Assist">
+        <span>
+          <IconButton
+            onClick={handleVideoAssist}
+            sx={{ color: videoAssistActive ? "lime" : "white" }}
+          >
+            <VideoFileIcon />
           </IconButton>
         </span>
       </Tooltip>
@@ -498,25 +576,22 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
         position: "relative",
       }}
     >
-      <Typography variant="h6" color="white" gutterBottom>
-        Active Call: {activeCallId || "None"}
-      </Typography>
-
       <Box sx={{ flex: 1, display: "flex", gap: 2 }}>
         {/* Agent Video */}
         <Box
           sx={{
-            flex: hasRemoteStream ? 1 : 1,
-            width: hasRemoteStream ? "50%" : "100%",
+            flex: videoAssistActive ? 0 : hasRemoteStream ? 1 : 1,
+            width: videoAssistActive ? "0%" : hasRemoteStream ? "50%" : "100%",
             position: "relative",
             borderRadius: 2,
             overflow: "hidden",
             bgcolor: "black",
             transition: "all 0.3s ease",
+            visibility: videoAssistActive ? "hidden" : "visible",
           }}
         >
           <div
-            ref={publisherRef}
+            ref={publisherContainerRef}
             style={{
               width: "100%",
               height: "100%",
@@ -548,13 +623,14 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
         {/* Customer Video */}
         <Box
           sx={{
-            flex: hasRemoteStream ? 1 : 0,
-            width: hasRemoteStream ? "50%" : "0%",
+            flex: videoAssistActive ? 1 : hasRemoteStream ? 1 : 0,
+            width: videoAssistActive ? "100%" : hasRemoteStream ? "50%" : "0%",
             position: "relative",
             borderRadius: 2,
             overflow: "hidden",
             bgcolor: "black",
-            visibility: hasRemoteStream ? "visible" : "hidden",
+            visibility:
+              hasRemoteStream || videoAssistActive ? "visible" : "hidden",
             transition: "all 0.3s ease",
           }}
         >
