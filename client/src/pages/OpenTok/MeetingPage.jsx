@@ -9,6 +9,10 @@ import {
   Tooltip,
   Modal,
   Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import {
   Videocam,
@@ -19,18 +23,20 @@ import {
   ScreenShare,
   StopScreenShare,
   Description,
+  CallEnd,
   Close as CloseIcon,
 } from "@mui/icons-material";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
+const ENABLE_AGENT_AUDIO = import.meta.env.VITE_AGENT_ENABLE_AUDIO === "true";
 
 const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
   const [error, setError] = useState(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
-  const [localVideoOn, setLocalVideoOn] = useState(true);
-  const [localAudioOn, setLocalAudioOn] = useState(true);
-
-  const [remoteVideoOn, setRemoteVideoOn] = useState(true);
+  const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
+  const [localAudioOn, setLocalAudioOn] = useState(ENABLE_AGENT_AUDIO);
+  const [remoteVideoOn, setRemoteVideoOn] = useState(false);
   const [uploadedFileUrl, setUploadedFileUrl] = useState(null);
   const [signingUrl, setSigningUrl] = useState(null);
   const [openModal, setOpenModal] = useState(false);
@@ -43,6 +49,21 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
   const screenPublisherRef = useRef(null);
+
+  const ensureMediaAccess = async () => {
+    try {
+      if (!ENABLE_AGENT_VIDEO && !ENABLE_AGENT_AUDIO) return true;
+      await navigator.mediaDevices.getUserMedia({
+        video: ENABLE_AGENT_VIDEO,
+        audio: ENABLE_AGENT_AUDIO,
+      });
+      return true;
+    } catch (err) {
+      console.error("Media access error:", err);
+      setError("Failed to access camera or mic. Please allow permissions.");
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (!sessionId) {
@@ -79,14 +100,14 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
 
             setHasVideoInput(videoInput);
             setHasAudioInput(audioInput);
-            setLocalVideoOn(videoInput);
-            setLocalAudioOn(audioInput);
+            setLocalVideoOn(ENABLE_AGENT_VIDEO && videoInput);
+            setLocalAudioOn(ENABLE_AGENT_AUDIO && audioInput);
 
-            if (videoInput || audioInput) {
-              await navigator.mediaDevices.getUserMedia({
-                video: videoInput,
-                audio: audioInput,
-              });
+            if (
+              (ENABLE_AGENT_VIDEO && videoInput) ||
+              (ENABLE_AGENT_AUDIO && audioInput)
+            ) {
+              await ensureMediaAccess();
             }
 
             const publisherOptions = {
@@ -94,13 +115,11 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
               width: "100%",
               height: "100%",
               name: "Agent",
-              videoSource: videoInput ? undefined : null,
-              audioSource: audioInput ? undefined : null,
+              videoSource: ENABLE_AGENT_VIDEO && videoInput ? undefined : null,
+              audioSource: ENABLE_AGENT_AUDIO && audioInput ? undefined : null,
+              video: ENABLE_AGENT_VIDEO && videoInput,
+              audio: ENABLE_AGENT_AUDIO && audioInput,
             };
-            console.log(
-              "🚀 ~ session.connect ~ publisherOptions:",
-              publisherOptions
-            );
 
             const publisher = OT.initPublisher(
               publisherRef.current,
@@ -110,15 +129,12 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
                   console.error("Publisher init error:", pubErr);
                   setError("Failed to initialize publisher");
                 } else {
-                  console.log("Publisher initialized");
                   publisherRef.current = publisher;
 
                   session.publish(publisher, (pubErr) => {
                     if (pubErr) {
                       console.error("Publish error:", pubErr);
                       setError("Failed to publish stream");
-                    } else {
-                      console.log("✅ Agent stream started publishing.");
                     }
                   });
 
@@ -136,8 +152,8 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
             );
 
             publisher.on("streamCreated", (e) => {
-              console.log("📡 Publisher stream created:", e.stream);
-              console.log("🎥 Stream has video:", e.stream.hasVideo);
+              console.log("Publisher stream created:", e.stream);
+              setLocalVideoOn(e.stream.hasVideo);
             });
           } catch (mediaErr) {
             console.error("Media error:", mediaErr);
@@ -148,6 +164,46 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
               setError(`Could not access media: ${mediaErr.message}`);
             }
           }
+        });
+
+        session.on("streamCreated", (event) => {
+          console.log("New stream created:", event.stream);
+          setHasRemoteStream(true);
+          setRemoteVideoOn(event.stream.hasVideo);
+
+          const subscriber = session.subscribe(
+            event.stream,
+            subscriberRef.current,
+            {
+              insertMode: "append",
+              width: "100%",
+              height: "100%",
+            },
+            (err) => {
+              if (err) {
+                console.error("Subscribe error:", err);
+                setError("Failed to subscribe to customer stream");
+              } else {
+                console.log("Subscribed to customer stream successfully");
+              }
+            }
+          );
+
+          subscriber.on("videoEnabled", () => {
+            console.log("Customer video enabled");
+            setRemoteVideoOn(true);
+          });
+
+          subscriber.on("videoDisabled", () => {
+            console.log("Customer video disabled");
+            setRemoteVideoOn(false);
+          });
+        });
+
+        session.on("streamDestroyed", (event) => {
+          console.log("Stream destroyed:", event.stream.streamId);
+          setHasRemoteStream(false);
+          setRemoteVideoOn(false);
         });
       } catch (err) {
         console.error(err);
@@ -174,147 +230,14 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
     };
   }, [sessionId, retryMedia]);
 
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!session) return;
-
-    function onStreamCreated(event) {
-      console.log("📡 streamCreated:", event.stream);
-      console.log("👀 subscriberRef.current:", subscriberRef.current);
-
-      setHasRemoteStream(true);
-
-      if (!subscriberRef.current) {
-        console.warn("⚠️ subscriberRef not ready, delaying subscription...");
-        const interval = setInterval(() => {
-          if (subscriberRef.current) {
-            clearInterval(interval);
-            session.subscribe(
-              event.stream,
-              subscriberRef.current,
-              { insertMode: "append", width: "100%", height: "100%" },
-              (err) => {
-                if (err) {
-                  console.error("Subscribe error:", err);
-                } else {
-                  console.log("✅ Subscribed to delayed remote stream.");
-                }
-              }
-            );
-          }
-        }, 100);
-        return;
-      }
-
-      const subscriber = session.subscribe(
-        event.stream,
-        subscriberRef.current,
-        { insertMode: "append", width: "100%", height: "100%" },
-        (err) => {
-          if (err) {
-            console.error("Subscribe error:", err);
-            setError("Failed to subscribe to stream");
-          } else {
-            console.log("✅ Subscribed to remote stream");
-          }
-        }
-      );
-
-      setRemoteVideoOn(event.stream.hasVideo);
-      subscriber.on("videoEnabled", () => setRemoteVideoOn(true));
-      subscriber.on("videoDisabled", () => setRemoteVideoOn(false));
-    }
-
-    function onStreamDestroyed() {
-      setHasRemoteStream(false);
-      setRemoteVideoOn(true);
-    }
-
-    session.on("streamCreated", onStreamCreated);
-    session.on("streamDestroyed", onStreamDestroyed);
-
-    return () => {
-      session.off("streamCreated", onStreamCreated);
-      session.off("streamDestroyed", onStreamDestroyed);
-    };
-  }, []);
-
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!session) return;
-
-    function onStreamCreated(event) {
-      console.log("🚀 ~ onStreamCreated ~ event:", event);
-      setHasRemoteStream(true);
-      const subscriber = session.subscribe(
-        event.stream,
-        subscriberRef.current,
-        { insertMode: "append", width: "100%", height: "100%" },
-        (err) => {
-          if (err) {
-            console.error("Subscribe error:", err);
-            setError("Failed to subscribe to stream");
-          }
-        }
-      );
-      console.log("🚀 ~ onStreamCreated ~ subscriber:", subscriber);
-      setRemoteVideoOn(event.stream.hasVideo);
-      subscriber.on("videoEnabled", () => setRemoteVideoOn(true));
-      subscriber.on("videoDisabled", () => setRemoteVideoOn(false));
-    }
-
-    function onStreamDestroyed() {
-      setHasRemoteStream(false);
-      setRemoteVideoOn(true);
-    }
-
-    function onFileUploadSignal(event) {
-      const { fileUrl } = JSON.parse(event.data);
-      setUploadedFileUrl(fileUrl);
-      setOpenModal(true);
-    }
-
-    function onDocumentSigningSignal(event) {
-      const { signingUrl } = JSON.parse(event.data);
-      setSigningUrl(signingUrl);
-      setOpenModal(true);
-    }
-
-    function logParticipantCount() {
-      const connections = session.connections || {};
-      const count = Object.keys(connections).length;
-      console.log("Current participant count:", count);
-    }
-
-    function onConnectionCreated() {
-      logParticipantCount();
-    }
-
-    function onConnectionDestroyed() {
-      logParticipantCount();
-    }
-
-    session.on("streamCreated", onStreamCreated);
-    session.on("streamDestroyed", onStreamDestroyed);
-    session.on("signal:file-upload", onFileUploadSignal);
-    session.on("signal:document-signing", onDocumentSigningSignal);
-    session.on("connectionCreated", onConnectionCreated);
-    session.on("connectionDestroyed", onConnectionDestroyed);
-
-    logParticipantCount();
-
-    return () => {
-      session.off("streamCreated", onStreamCreated);
-      session.off("streamDestroyed", onStreamDestroyed);
-      session.off("signal:file-upload", onFileUploadSignal);
-      session.off("signal:document-signing", onDocumentSigningSignal);
-      session.off("connectionCreated", onConnectionCreated);
-      session.off("connectionDestroyed", onConnectionDestroyed);
-    };
-  }, []);
-
-  const toggleVideo = () => {
+  const toggleVideo = async () => {
     if (!publisherRef.current || !hasVideoInput) return;
+
+    if (!localVideoOn) {
+      const granted = await ensureMediaAccess();
+      if (!granted) return;
+    }
+
     publisherRef.current.publishVideo(!localVideoOn);
     setLocalVideoOn(!localVideoOn);
   };
@@ -333,8 +256,6 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
     formData.append("file", file);
 
     try {
-      const backendUrl =
-        import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
       const res = await axios.post(`${backendUrl}/api/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -360,8 +281,6 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
 
   const sendDocumentForSigning = async () => {
     try {
-      const backendUrl =
-        import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
       const res = await axios.post(`${backendUrl}/api/signing`, {
         sessionId,
         document: "sample.pdf",
@@ -447,6 +366,10 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
     setRetryMedia(!retryMedia);
   };
 
+  const handleCloseErrorDialog = () => {
+    setError(null);
+  };
+
   const handleEndCall = async () => {
     console.log("Ending call...");
     if (sessionRef.current) {
@@ -491,28 +414,6 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
     </Box>
   );
 
-  if (error) {
-    return (
-      <Paper sx={{ p: 2, bgcolor: "error.main", color: "white" }}>
-        <Typography variant="h6">Error: {error}</Typography>
-        <Typography variant="body2">
-          {error.includes("NotReadableError")
-            ? "Please close any applications or browser tabs using your camera or microphone, then try again."
-            : "Please ensure your camera and microphone are connected and accessible in your browser settings."}
-        </Typography>
-        {retryMedia && (
-          <Button
-            onClick={retryMediaAccess}
-            variant="contained"
-            sx={{ mt: 2, bgcolor: "white", color: "error.main" }}
-          >
-            Retry Camera/Microphone
-          </Button>
-        )}
-      </Paper>
-    );
-  }
-
   const ActivityToolbar = () => (
     <Box
       sx={{
@@ -534,7 +435,7 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
           <IconButton
             onClick={toggleVideo}
             sx={{ color: "white" }}
-            disabled={isScreenSharing || !hasVideoInput}
+            disabled={isScreenSharing || !hasVideoInput || !ENABLE_AGENT_VIDEO}
           >
             {localVideoOn ? <Videocam /> : <VideocamOff />}
           </IconButton>
@@ -546,7 +447,7 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
           <IconButton
             onClick={toggleAudio}
             sx={{ color: "white" }}
-            disabled={!hasAudioInput}
+            disabled={!hasAudioInput || !ENABLE_AGENT_AUDIO}
           >
             {localAudioOn ? <Mic /> : <MicOff />}
           </IconButton>
@@ -579,7 +480,7 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
 
       <Tooltip title="End Call">
         <IconButton onClick={handleEndCall} sx={{ color: "red" }}>
-          <CloseIcon />
+          <CallEnd />
         </IconButton>
       </Tooltip>
     </Box>
@@ -602,13 +503,16 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
       </Typography>
 
       <Box sx={{ flex: 1, display: "flex", gap: 2 }}>
+        {/* Agent Video */}
         <Box
           sx={{
-            flex: 1,
+            flex: hasRemoteStream ? 1 : 1,
+            width: hasRemoteStream ? "50%" : "100%",
             position: "relative",
             borderRadius: 2,
             overflow: "hidden",
             bgcolor: "black",
+            transition: "all 0.3s ease",
           }}
         >
           <div
@@ -639,57 +543,50 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
           >
             You
           </Typography>
-          {!hasVideoInput && !isScreenSharing && (
-            <Typography
-              variant="body2"
-              color="warning.main"
-              sx={{ position: "absolute", bottom: 32, left: 8, zIndex: 2 }}
-            >
-              No local camera detected — listen-only mode
-            </Typography>
-          )}
         </Box>
 
-        {hasRemoteStream && (
-          <Box
+        {/* Customer Video */}
+        <Box
+          sx={{
+            flex: hasRemoteStream ? 1 : 0,
+            width: hasRemoteStream ? "50%" : "0%",
+            position: "relative",
+            borderRadius: 2,
+            overflow: "hidden",
+            bgcolor: "black",
+            visibility: hasRemoteStream ? "visible" : "hidden",
+            transition: "all 0.3s ease",
+          }}
+        >
+          <div
+            ref={subscriberRef}
+            style={{
+              width: "100%",
+              height: "100%",
+              position: "absolute",
+              top: 0,
+              left: 0,
+              zIndex: 0,
+            }}
+          />
+          {!remoteVideoOn && renderFallbackAvatar("Customer")}
+          <Typography
             sx={{
-              flex: 1,
-              position: "relative",
-              borderRadius: 2,
-              overflow: "hidden",
+              position: "absolute",
+              bottom: 8,
+              left: 8,
               bgcolor: "black",
+              color: "white",
+              px: 1,
+              py: 0.5,
+              borderRadius: 1,
+              fontSize: 12,
+              zIndex: 2,
             }}
           >
-            <div
-              ref={subscriberRef}
-              style={{
-                width: "100%",
-                height: "100%",
-                position: "absolute",
-                top: 0,
-                left: 0,
-                zIndex: 0,
-              }}
-            />
-            {!remoteVideoOn && renderFallbackAvatar("Remote")}
-            <Typography
-              sx={{
-                position: "absolute",
-                bottom: 8,
-                left: 8,
-                bgcolor: "black",
-                color: "white",
-                px: 1,
-                py: 0.5,
-                borderRadius: 1,
-                fontSize: 12,
-                zIndex: 2,
-              }}
-            >
-              Remote
-            </Typography>
-          </Box>
-        )}
+            Customer
+          </Typography>
+        </Box>
       </Box>
 
       <ActivityToolbar />
@@ -740,6 +637,63 @@ const MeetingPage = ({ sessionId, activeCallId, onCallEnd }) => {
           </Box>
         </Box>
       </Modal>
+
+      <Dialog
+        open={!!error}
+        onClose={handleCloseErrorDialog}
+        max
+        ChatGPT
+        said:Width="sm"
+        fullWidth
+      >
+        <DialogTitle
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <Typography variant="h6" color="error">
+            Error
+          </Typography>
+          <IconButton onClick={handleCloseErrorDialog} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        php-template Copy Edit
+        <DialogContent dividers>
+          <Typography>{error}</Typography>
+          {error?.includes("NotReadableError") ? (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Please close any applications or browser tabs using your camera or
+              microphone, then try again.
+            </Typography>
+          ) : (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Please ensure your camera and microphone are connected and
+              accessible in your browser settings.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {retryMedia && (
+            <Button
+              onClick={retryMediaAccess}
+              variant="outlined"
+              color="primary"
+            >
+              Retry Camera/Mic
+            </Button>
+          )}
+          <Button
+            onClick={handleCloseErrorDialog}
+            variant="contained"
+            color="error"
+          >
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 };
