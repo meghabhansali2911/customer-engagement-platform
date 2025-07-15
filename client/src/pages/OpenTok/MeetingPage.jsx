@@ -27,17 +27,13 @@ import {
   Close as CloseIcon,
 } from "@mui/icons-material";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
-import { Document, Page, pdfjs } from "react-pdf";
-
-// Required for pdf.js to work correctly
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+import { Document, Page } from "react-pdf";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
 const ENABLE_AGENT_AUDIO = import.meta.env.VITE_AGENT_ENABLE_AUDIO === "true";
 
 const MeetingPage = ({ sessionId, onCallEnd }) => {
-  const [error, setError] = useState(null);
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
   const [localAudioOn, setLocalAudioOn] = useState(ENABLE_AGENT_AUDIO);
@@ -50,9 +46,8 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [hasAudioInput, setHasAudioInput] = useState(false);
   const [videoAssistActive, setVideoAssistActive] = useState(false);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [uploadMode, setUploadMode] = useState("");
-  const [pdfUrl, setPdfUrl] = useState(null);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [customerFileUrl, setCustomerFileUrl] = useState(null);
+  const [customerFileDialogOpen, setCustomerFileDialogOpen] = useState(false);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -63,23 +58,16 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const publisherContainerRef = useRef(null);
 
   const ensureMediaAccess = async () => {
-    try {
-      if (!ENABLE_AGENT_VIDEO && !ENABLE_AGENT_AUDIO) return true;
-      await navigator.mediaDevices.getUserMedia({
-        video: ENABLE_AGENT_VIDEO,
-        audio: ENABLE_AGENT_AUDIO,
-      });
-      return true;
-    } catch (err) {
-      console.error("Media access error:", err);
-      setError("Failed to access camera or mic. Please allow permissions.");
-      return false;
-    }
+    if (!ENABLE_AGENT_VIDEO && !ENABLE_AGENT_AUDIO) return true;
+    await navigator.mediaDevices.getUserMedia({
+      video: ENABLE_AGENT_VIDEO,
+      audio: ENABLE_AGENT_AUDIO,
+    });
+    return true;
   };
 
   useEffect(() => {
     if (!sessionId) {
-      setError("Missing sessionId");
       return;
     }
 
@@ -101,7 +89,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
         session.connect(token, async (err) => {
           if (err) {
-            setError("Failed to connect to session");
             return;
           }
 
@@ -139,7 +126,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
               (pubErr) => {
                 if (pubErr) {
                   console.error("Publisher init error:", pubErr);
-                  setError("Failed to initialize publisher");
+                  console.log("Failed to initialize publisher");
                 } else {
                   webcamPublisherRef.current = webcamPublisher;
                   publisherRef.current = webcamPublisher;
@@ -147,7 +134,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                   session.publish(webcamPublisher, (pubErr2) => {
                     if (pubErr2) {
                       console.error("Publish error:", pubErr2);
-                      setError("Failed to publish stream");
+                      console.log("Failed to publish stream");
                     }
                   });
 
@@ -171,10 +158,10 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           } catch (mediaErr) {
             console.error("Media error:", mediaErr);
             if (mediaErr.name === "NotReadableError") {
-              setError("Camera or microphone is in use by another app.");
+              console.log("Camera or microphone is in use by another app.");
               setRetryMedia(true);
             } else {
-              setError(`Could not access media: ${mediaErr.message}`);
+              console.log(`Could not access media: ${mediaErr.message}`);
             }
           }
         });
@@ -195,7 +182,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             (err) => {
               if (err) {
                 console.error("Subscribe error:", err);
-                setError("Failed to subscribe to customer stream");
+                console.log("Failed to subscribe to customer stream");
               } else {
                 console.log("Subscribed to customer stream successfully");
               }
@@ -218,9 +205,25 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           setHasRemoteStream(false);
           setRemoteVideoOn(false);
         });
+
+        session.on("signal", (event) => {
+          console.log("📡 Received signal:", event.type, event.data);
+        });
+
+        session.on("signal:file-share", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.url) {
+              setCustomerFileUrl(data.url);
+              setCustomerFileDialogOpen(true);
+            }
+          } catch (err) {
+            console.error("Failed to parse file-share signal data:", err);
+          }
+        });
       } catch (err) {
         console.error(err);
-        if (isMounted) setError("Failed to initialize session");
+        if (isMounted) console.log("Failed to initialize session");
       }
     }
 
@@ -257,7 +260,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       setLocalVideoOn(!localVideoOn);
     } catch (err) {
       console.error("Video toggle failed:", err);
-      setError("Failed to toggle video");
+      console.log("Failed to toggle video");
     }
   };
 
@@ -270,7 +273,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       setLocalAudioOn(!localAudioOn);
     } catch (err) {
       console.error("Audio toggle failed:", err);
-      setError("Failed to toggle audio");
+      console.log("Failed to toggle audio");
     }
   };
 
@@ -296,7 +299,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       setOpenModal(true);
     } catch (err) {
       console.error("Signing error:", err);
-      setError("Failed to initiate document signing");
+      console.log("Failed to initiate document signing");
     }
   };
 
@@ -334,7 +337,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           (err) => {
             if (err) {
               console.error("Screen publisher init error:", err);
-              setError("Failed to initialize screen sharing");
+              console.log("Failed to initialize screen sharing");
               if (webcamPublisherRef.current) {
                 sessionRef.current.publish(webcamPublisherRef.current);
               }
@@ -344,7 +347,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             sessionRef.current.publish(screenPublisher, (pubErr) => {
               if (pubErr) {
                 console.error("Screen publish error:", pubErr);
-                setError("Failed to publish screen stream");
+                console.log("Failed to publish screen stream");
                 if (webcamPublisherRef.current) {
                   sessionRef.current.publish(webcamPublisherRef.current);
                 }
@@ -356,21 +359,12 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         );
       } catch (err) {
         console.error("Screen sharing error:", err);
-        setError("Could not start screen sharing");
+        console.log("Could not start screen sharing");
         if (webcamPublisherRef.current && sessionRef.current) {
           sessionRef.current.publish(webcamPublisherRef.current);
         }
       }
     }
-  };
-
-  const retryMediaAccess = () => {
-    setError(null);
-    setRetryMedia(!retryMedia);
-  };
-
-  const handleCloseErrorDialog = () => {
-    setError(null);
   };
 
   const handleVideoAssist = () => {
@@ -385,7 +379,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       (err) => {
         if (err) {
           console.error("Signal error:", err);
-          setError("Failed to send video assist signal");
+          console.log("Failed to send video assist signal");
         } else {
           setVideoAssistActive(nextState);
           console.log(
@@ -408,6 +402,24 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       sessionRef.current.disconnect();
     }
     onCallEnd();
+  };
+
+  const handleCloseFileDialog = () => {
+    console.log("File dialog closed");
+
+    sessionRef.current?.signal(
+      {
+        type: "file-preview-closed",
+        data: "Agent closed the file preview",
+      },
+      (err) => {
+        if (err) console.error("Signal send error:", err);
+      }
+    );
+
+    // Reset all customer file related state
+    setCustomerFileUrl(null);
+    setCustomerFileDialogOpen(false);
   };
 
   const renderFallbackAvatar = (label = "You") => (
@@ -518,6 +530,42 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       </Tooltip>
     </Box>
   );
+
+  const uploadFileAndSignal = async (file) => {
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await axios.post(`${backendUrl}/api/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const uploadedFileUrl = res.data.url;
+      // Send OpenTok signal to share file URL with customer
+      sessionRef.current?.signal(
+        {
+          type: "file-share",
+          data: JSON.stringify({
+            name: file.name,
+            url: uploadedFileUrl,
+          }),
+        },
+        (err) => {
+          if (err) {
+            console.error("Signal send error:", err);
+          } else {
+            // Open dialog and set preview url to backend URL (not just local preview)
+            setCustomerFileUrl(uploadedFileUrl);
+            setCustomerFileDialogOpen(true);
+          }
+        }
+      );
+    } catch (err) {
+      console.error("File upload failed:", err);
+    }
+  };
 
   return (
     <Paper
@@ -663,60 +711,13 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         accept="application/pdf"
         ref={fileInputRef}
         style={{ display: "none" }}
-        onChange={(e) => {
+        onChange={async (e) => {
           const file = e.target.files[0];
           if (file) {
-            setSelectedFile(file);
-            setPdfUrl(URL.createObjectURL(file));
+            await uploadFileAndSignal(file);
           }
         }}
       />
-
-      {pdfUrl && (
-        <Box
-          sx={{
-            mt: 2,
-            bgcolor: "background.paper",
-            p: 2,
-            borderRadius: 2,
-            boxShadow: 3,
-            maxHeight: "70vh",
-            overflowY: "auto",
-          }}
-        >
-          <Typography variant="h6" gutterBottom>
-            PDF Preview: {selectedFile?.name}
-          </Typography>
-          <Document file={pdfUrl} onLoadError={console.error}>
-            <Page pageNumber={1} />
-          </Document>
-          <Button
-            variant="contained"
-            color="primary"
-            sx={{ mt: 2 }}
-            onClick={() => {
-              const reader = new FileReader();
-              reader.onload = () => {
-                sessionRef.current?.signal(
-                  {
-                    type: "file-share",
-                    data: JSON.stringify({
-                      name: selectedFile.name,
-                      content: reader.result,
-                    }),
-                  },
-                  (err) => {
-                    if (err) console.error("Signal send error:", err);
-                  }
-                );
-              };
-              reader.readAsDataURL(selectedFile);
-            }}
-          >
-            Share with Customer
-          </Button>
-        </Box>
-      )}
 
       <Dialog
         open={uploadDialogOpen}
@@ -727,7 +728,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <Button
             variant="contained"
             onClick={() => {
-              setUploadMode("agent");
               setUploadDialogOpen(false);
               fileInputRef.current.click(); // trigger file picker
             }}
@@ -738,7 +738,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <Button
             variant="outlined"
             onClick={() => {
-              setUploadMode("customer");
               setUploadDialogOpen(false);
               // Send OpenTok signal to customer
               sessionRef.current?.signal(
@@ -762,55 +761,28 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       </Dialog>
 
       <Dialog
-        open={!!error}
-        onClose={handleCloseErrorDialog}
-        maxWidth="sm"
+        open={customerFileDialogOpen}
+        onClose={handleCloseFileDialog}
+        aria-labelledby="uploaded-file-dialog-title"
+        maxWidth="md"
         fullWidth
       >
-        <DialogTitle
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <Typography variant="h6" color="error">
-            Error
-          </Typography>
-          <IconButton onClick={handleCloseErrorDialog} size="small">
-            <CloseIcon />
-          </IconButton>
-        </DialogTitle>
-        php-template Copy Edit
+        <DialogTitle id="uploaded-file-dialog-title">File Preview</DialogTitle>
         <DialogContent dividers>
-          <Typography>{error}</Typography>
-          {error?.includes("NotReadableError") ? (
-            <Typography variant="body2" sx={{ mt: 1 }}>
-              Please close any applications or browser tabs using your camera or
-              microphone, then try again.
-            </Typography>
+          {customerFileUrl ? (
+            <iframe
+              src={customerFileUrl}
+              title="Uploaded PDF Preview"
+              width="100%"
+              height="600px"
+              style={{ border: "none" }}
+            />
           ) : (
-            <Typography variant="body2" sx={{ mt: 1 }}>
-              Please ensure your camera and microphone are connected and
-              accessible in your browser settings.
-            </Typography>
+            <Typography color="error">Preview not available.</Typography>
           )}
         </DialogContent>
         <DialogActions>
-          {retryMedia && (
-            <Button
-              onClick={retryMediaAccess}
-              variant="outlined"
-              color="primary"
-            >
-              Retry Camera/Mic
-            </Button>
-          )}
-          <Button
-            onClick={handleCloseErrorDialog}
-            variant="contained"
-            color="error"
-          >
+          <Button onClick={handleCloseFileDialog} color="primary" autoFocus>
             Close
           </Button>
         </DialogActions>

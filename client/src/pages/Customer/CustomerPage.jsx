@@ -32,9 +32,9 @@ const CustomerPage = () => {
   const [waitingForAgent, setWaitingForAgent] = useState(false);
   const [publisherHasVideo, setPublisherHasVideo] = useState(true);
   const [subscriberHasVideo, setSubscriberHasVideo] = useState(false);
-  const [receivedFile, setReceivedFile] = useState(null);
-  const [filePreviewUrl, setFilePreviewUrl] = useState(null);
   const [fileUploadRequested, setFileUploadRequested] = useState(false);
+  const [showUploadedDialog, setShowUploadedDialog] = useState(false);
+  const [filePreviewUrl, setFilePreviewUrl] = useState(null);
 
   // ⬇ Refs
   const fileInputRef = useRef(null);
@@ -210,6 +210,12 @@ const CustomerPage = () => {
     console.log("🔹 handleCallAccepted ended");
   };
 
+  const handleCloseFilePreviewDialog = () => {
+    console.log("🔐 File dialog closed");
+    setShowUploadedDialog(false);
+    setFilePreviewUrl(null);
+  };
+
   useEffect(() => {
     console.log("🟢 useEffect (token) started");
     const session = sessionRef.current;
@@ -259,9 +265,8 @@ const CustomerPage = () => {
         try {
           const parsed = JSON.parse(event.data);
           console.log("📎 Received file from agent:", parsed.name);
-
-          setReceivedFile(parsed);
-          setFilePreviewUrl(parsed.content);
+          setFilePreviewUrl(parsed.url);
+          setShowUploadedDialog(true);
         } catch (err) {
           console.error("❌ Failed to parse file signal:", err);
         }
@@ -293,6 +298,7 @@ const CustomerPage = () => {
     session.on("signal:video-assist", handleVideoAssist);
     session.on("signal:file-request", handleFileUpload);
     session.on("signal:file-share", handleFileUpload);
+    session.on("signal:file-preview-closed", handleCloseFilePreviewDialog);
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
     return () => {
@@ -307,6 +313,55 @@ const CustomerPage = () => {
       }
     };
   }, [token]);
+
+  const uploadAndShareFile = async ({
+    file,
+    session,
+    setShowUploadedDialog,
+    setError,
+    backendUrl,
+    setFilePreviewUrl, // add this prop in your call
+  }) => {
+    if (!file || file.type !== "application/pdf") {
+      setError("Only PDF files are supported.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      console.log("📤 Uploading file to backend...");
+      const res = await axios.post(`${backendUrl}/api/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const fileData = {
+        name: res.data.name,
+        url: res.data.url,
+      };
+
+      session.signal(
+        {
+          type: "file-share",
+          data: JSON.stringify(fileData),
+        },
+        (err) => {
+          if (err) {
+            console.error("❌ File signal send error:", err);
+            setError("Failed to share file.");
+          } else {
+            console.log("📡 File shared via signal:", fileData);
+            setFilePreviewUrl(res.data.url); // <<<< SET THIS
+            setShowUploadedDialog(true);
+          }
+        }
+      );
+    } catch (err) {
+      console.error("❌ File upload failed:", err);
+      setError("File upload failed. Please try again.");
+    }
+  };
 
   useEffect(() => {
     console.log("🟡 useEffect (componentWillUnmount) started");
@@ -534,55 +589,22 @@ const CustomerPage = () => {
             type="file"
             accept="application/pdf"
             style={{ display: "none" }}
-            onChange={(e) => {
+            onChange={async (e) => {
               const file = e.target.files[0];
-              if (file) {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  const session = sessionRef.current;
-                  if (!session) return;
+              const session = sessionRef.current;
 
-                  session.signal(
-                    {
-                      type: "file-share",
-                      data: JSON.stringify({
-                        name: file.name,
-                        content: reader.result, // base64
-                      }),
-                    },
-                    (err) => {
-                      if (err) {
-                        console.error("❌ File signal send error:", err);
-                      } else {
-                        console.log("📤 Sent file to agent");
-                      }
-                    }
-                  );
-                };
-                reader.readAsDataURL(file);
-              }
+              if (!file || !session) return;
+
+              await uploadAndShareFile({
+                file,
+                session,
+                setShowUploadedDialog,
+                setError,
+                backendUrl,
+                setFilePreviewUrl,
+              });
             }}
           />
-
-          {receivedFile && (
-            <Box sx={{ mt: 2, p: 1, bgcolor: "#222", borderRadius: 1 }}>
-              <Typography variant="subtitle1" color="white">
-                Received file: {receivedFile.name}
-              </Typography>
-              {filePreviewUrl && (
-                <Box sx={{ mt: 1 }}>
-                  <a
-                    href={filePreviewUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: "#90caf9" }}
-                  >
-                    View File
-                  </a>
-                </Box>
-              )}
-            </Box>
-          )}
 
           {/* Dialog for file upload request */}
           <Dialog
@@ -619,6 +641,32 @@ const CustomerPage = () => {
                 Upload File
               </Button>
             </DialogActions>
+          </Dialog>
+
+          {/* Dialog for showing uploaded file */}
+          <Dialog
+            open={showUploadedDialog}
+            onClose={handleCloseFilePreviewDialog}
+            aria-labelledby="uploaded-file-dialog-title"
+            maxWidth="md"
+            fullWidth
+          >
+            <DialogTitle id="uploaded-file-dialog-title">
+              File Preview
+            </DialogTitle>
+            <DialogContent dividers>
+              {filePreviewUrl ? (
+                <iframe
+                  src={filePreviewUrl}
+                  title="Uploaded PDF Preview"
+                  width="100%"
+                  height="600px"
+                  style={{ border: "none" }}
+                />
+              ) : (
+                <Typography color="error">Preview not available.</Typography>
+              )}
+            </DialogContent>
           </Dialog>
         </Box>
       </Paper>

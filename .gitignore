@@ -38,3 +38,6 @@ coverage/
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
+# Ignore uploads folder contents
+uploads/*

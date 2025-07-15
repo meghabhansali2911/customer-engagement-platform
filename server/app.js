@@ -1,11 +1,15 @@
+// server.js or index.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenTok from "opentok";
+import path from "path";
 
+// Route imports
 import createTokenRoutes from "./routes/tokenRoutes.js";
 import createCallRequestRoutes from "./routes/callRequestRoutes.js";
 import callbackRoutes from "./routes/callbackRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
 
 dotenv.config();
 
@@ -18,9 +22,13 @@ const opentok = new OpenTok(apiKey, apiSecret);
 app.use(cors());
 app.use(express.json());
 
-// Routes
+// Static file serving for uploaded PDFs
+app.use("/uploads", express.static(path.resolve("uploads")));
+
+// API Routes
 app.use("/api", createTokenRoutes(opentok, apiKey));
 app.use("/api", createCallRequestRoutes(opentok, apiKey));
 app.use("/api", callbackRoutes);
+app.use("/api", uploadRoutes); // ✅ New upload route
 
 export default app;
