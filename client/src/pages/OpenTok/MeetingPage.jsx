@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  CircularProgress,
 } from "@mui/material";
 import {
   Videocam,
@@ -27,7 +28,8 @@ import {
   Close as CloseIcon,
 } from "@mui/icons-material";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
-import { Document, Page } from "react-pdf";
+import { Document, Page, pdfjs } from "react-pdf";
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
@@ -38,8 +40,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
   const [localAudioOn, setLocalAudioOn] = useState(ENABLE_AGENT_AUDIO);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
-  const [signingUrl, setSigningUrl] = useState(null);
-  const [openModal, setOpenModal] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [retryMedia, setRetryMedia] = useState(false);
   const [hasVideoInput, setHasVideoInput] = useState(false);
@@ -49,6 +49,10 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [customerFileUrl, setCustomerFileUrl] = useState(null);
   const [customerFileDialogOpen, setCustomerFileDialogOpen] = useState(false);
   const [customerFileName, setCustomerFileName] = useState(null);
+  const [waitingForSignedDoc, setWaitingForSignedDoc] = useState(false);
+  const [signedDocUrl, setSignedDocUrl] = useState(null);
+  const [signedDocName, setSignedDocName] = useState(null);
+  const [signedDocDialogOpen, setSignedDocDialogOpen] = useState(false);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -223,6 +227,21 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             console.error("Failed to parse file-share signal data:", err);
           }
         });
+
+        session.on("signal:signed-document", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log("Signed document received:", data);
+            if (data.url) {
+              setSignedDocUrl(data.url);
+              setSignedDocName(data.name || "Signed Document");
+              setSignedDocDialogOpen(true);
+              setWaitingForSignedDoc(false); // stop waiting when received
+            }
+          } catch (err) {
+            console.error("Failed to parse signed document signal:", err);
+          }
+        });
       } catch (err) {
         console.error(err);
         if (isMounted) console.log("Failed to initialize session");
@@ -276,32 +295,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     } catch (err) {
       console.error("Audio toggle failed:", err);
       console.log("Failed to toggle audio");
-    }
-  };
-
-  const sendDocumentForSigning = async () => {
-    try {
-      const res = await axios.post(`${backendUrl}/api/signing`, {
-        sessionId,
-        document: "sample.pdf",
-      });
-      const { signingUrl } = res.data;
-
-      sessionRef.current.signal(
-        {
-          type: "document-signing",
-          data: JSON.stringify({ signingUrl }),
-        },
-        (err) => {
-          if (err) console.error("Signal error:", err);
-        }
-      );
-
-      setSigningUrl(signingUrl);
-      setOpenModal(true);
-    } catch (err) {
-      console.error("Signing error:", err);
-      console.log("Failed to initiate document signing");
     }
   };
 
@@ -443,6 +436,32 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     return "unknown";
   };
 
+  const handleDownloadAndSignal = async () => {
+    if (!signedDocUrl) return;
+
+    try {
+      const response = await fetch(signedDocUrl, { mode: "cors" });
+      if (!response.ok) throw new Error("Network response was not ok");
+
+      const blob = await response.blob();
+
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = signedDocName || "downloaded-file";
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(blobUrl);
+      }, 100);
+    } catch (error) {
+      console.warn("Direct download failed, opening file in new tab:", error);
+      window.open(signedDocUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
   const renderFallbackAvatar = (label = "You") => (
     <Box
       sx={{
@@ -538,8 +557,14 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         </IconButton>
       </Tooltip>
 
-      <Tooltip title="Send Document for Signing">
-        <IconButton onClick={sendDocumentForSigning} sx={{ color: "white" }}>
+      <Tooltip title="Upload & Send Document for Signing">
+        <IconButton
+          onClick={() => {
+            fileInputRef.current.dataset.intent = "sign";
+            fileInputRef.current.click();
+          }}
+          sx={{ color: "white" }}
+        >
           <Description />
         </IconButton>
       </Tooltip>
@@ -552,7 +577,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     </Box>
   );
 
-  const uploadFileAndSignal = async (file) => {
+  const uploadFileAndSignal = async (file, type = "preview") => {
     if (!file) return;
 
     const formData = new FormData();
@@ -564,10 +589,12 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       });
 
       const uploadedFileUrl = res.data.url;
-      // Send OpenTok signal to share file URL with customer
+      const signalType = type === "sign" ? "file-for-signing" : "file-preview";
+
+      // Send signal with the uploaded file URL
       sessionRef.current?.signal(
         {
-          type: "file-share",
+          type: signalType,
           data: JSON.stringify({
             name: file.name,
             url: uploadedFileUrl,
@@ -577,9 +604,14 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           if (err) {
             console.error("Signal send error:", err);
           } else {
-            // Open dialog and set preview url to backend URL (not just local preview)
-            setCustomerFileUrl(uploadedFileUrl);
-            setCustomerFileDialogOpen(true);
+            if (type === "sign") {
+              // Show waiting for signed doc modal
+              setWaitingForSignedDoc(true);
+            } else {
+              setCustomerFileUrl(uploadedFileUrl);
+              setCustomerFileName(file.name);
+              setCustomerFileDialogOpen(true);
+            }
           }
         }
       );
@@ -691,42 +723,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
       <ActivityToolbar />
 
-      <Modal open={openModal} onClose={() => setOpenModal(false)}>
-        <Box
-          sx={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            bgcolor: "background.paper",
-            boxShadow: 24,
-            p: 4,
-            borderRadius: 2,
-            maxWidth: 600,
-            width: "90%",
-            maxHeight: "80vh",
-            overflowY: "auto",
-          }}
-        >
-          {signingUrl && (
-            <>
-              <Typography variant="h6" gutterBottom>
-                Document for Signing
-              </Typography>
-              <a href={signingUrl} target="_blank" rel="noreferrer">
-                {signingUrl}
-              </a>
-            </>
-          )}
-
-          <Box sx={{ mt: 2, textAlign: "right" }}>
-            <Button onClick={() => setOpenModal(false)} variant="contained">
-              Close
-            </Button>
-          </Box>
-        </Box>
-      </Modal>
-
       <input
         type="file"
         accept="*/*"
@@ -734,9 +730,17 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         style={{ display: "none" }}
         onChange={async (e) => {
           const file = e.target.files[0];
+          const intent = e.target.dataset.intent || "preview";
+
           if (file) {
-            await uploadFileAndSignal(file);
+            await uploadFileAndSignal(
+              file,
+              intent === "sign" ? "sign" : "preview"
+            );
           }
+
+          e.target.value = "";
+          delete e.target.dataset.intent;
         }}
       />
 
@@ -856,6 +860,119 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <Button onClick={handleCloseFileDialog} color="primary" autoFocus>
             Close
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={waitingForSignedDoc}
+        onClose={() => {}}
+        disableEscapeKeyDown
+      >
+        <DialogTitle>Waiting for Signed Document</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Document uploaded. Waiting for the customer to sign and send back...
+          </Typography>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              mt: 3,
+            }}
+          >
+            <CircularProgress />
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={signedDocDialogOpen}
+        onClose={() => setSignedDocDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        aria-labelledby="signed-doc-dialog-title"
+      >
+        <DialogTitle id="signed-doc-dialog-title">
+          Signed Document Preview
+        </DialogTitle>
+        <DialogContent dividers>
+          {signedDocUrl ? (
+            (() => {
+              const fileType = getFileType(signedDocUrl, signedDocName);
+              console.log("🚀 ~ MeetingPage ~ fileType:", fileType);
+
+              switch (fileType) {
+                case "image":
+                  return (
+                    <img
+                      src={signedDocUrl}
+                      alt={signedDocName}
+                      style={{
+                        width: "100%",
+                        maxHeight: 600,
+                        objectFit: "contain",
+                      }}
+                    />
+                  );
+                case "video":
+                  return (
+                    <video
+                      src={signedDocUrl}
+                      controls
+                      style={{ width: "100%", maxHeight: 600 }}
+                    />
+                  );
+                case "audio":
+                  return (
+                    <audio
+                      src={signedDocUrl}
+                      controls
+                      style={{ width: "100%" }}
+                    />
+                  );
+                case "pdf":
+                  return (
+                    <iframe
+                      src={signedDocUrl}
+                      title="Uploaded PDF Preview"
+                      width="100%"
+                      height="600px"
+                      style={{ border: "none" }}
+                    />
+                  );
+                default:
+                  return (
+                    <Typography>
+                      Preview not available for this file type.{" "}
+                      <a href={signedDocUrl} target="_blank" rel="noreferrer">
+                        Click here to download.
+                      </a>
+                    </Typography>
+                  );
+              }
+            })()
+          ) : (
+            <Typography color="error">Preview not available.</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <DialogActions>
+            {signedDocUrl && (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleDownloadAndSignal}
+              >
+                Download
+              </Button>
+            )}
+            <Button
+              onClick={() => setSignedDocDialogOpen(false)}
+              color="primary"
+            >
+              Close
+            </Button>
+          </DialogActions>
         </DialogActions>
       </Dialog>
     </Paper>

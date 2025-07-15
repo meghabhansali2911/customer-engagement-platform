@@ -30,9 +30,12 @@ router.post("/upload", upload.single("file"), (req, res) => {
       .json({ error: "No file uploaded or invalid file type" });
   }
 
+  console.log("🚀 ~ router.post ~ req.fil:", req.file);
+
   const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${
     req.file.filename
   }`;
+  console.log("🚀 ~ fileUrl ~ fileUrl:", fileUrl);
   res.json({ name: req.file.originalname, url: fileUrl });
 });
 

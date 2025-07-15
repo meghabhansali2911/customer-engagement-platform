@@ -1,7 +1,9 @@
 // ⬇ Import statements remain unchanged
 import React, { useState, useRef, useEffect } from "react";
 import OT from "@opentok/client";
+import SignatureCanvas from "react-signature-canvas";
 import axios from "axios";
+import { PDFDocument } from "pdf-lib";
 import {
   Box,
   Button,
@@ -36,6 +38,9 @@ const CustomerPage = () => {
   const [showUploadedDialog, setShowUploadedDialog] = useState(false);
   const [filePreviewUrl, setFilePreviewUrl] = useState(null);
   const [filePreviewName, setFilePreviewName] = useState(null);
+  const [signatureDocUrl, setSignatureDocUrl] = useState(null);
+  const [signatureDocName, setSignatureDocName] = useState(null);
+  const [signatureModalOpen, setSignatureModalOpen] = useState(false);
 
   // ⬇ Refs
   const fileInputRef = useRef(null);
@@ -43,6 +48,7 @@ const CustomerPage = () => {
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
   const publisher = useRef(null);
+  const sigPadRef = useRef(null);
 
   // ⬇ Render fallback avatar box
   const renderFallbackAvatar = (label = "You") => {
@@ -211,6 +217,120 @@ const CustomerPage = () => {
     console.log("🔹 handleCallAccepted ended");
   };
 
+  const handleSendSignedDocument = async (signatureDataUrl) => {
+    if (!sessionRef.current || !signatureDocUrl || !signatureDocName) {
+      setError("Session or file not available for signing.");
+      return;
+    }
+
+    const fileType = getFileType(signatureDocUrl, signatureDocName);
+    let finalBlob;
+
+    try {
+      if (fileType === "pdf") {
+        const pdfBytes = await fetch(signatureDocUrl).then((res) =>
+          res.arrayBuffer()
+        );
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        const sigImageBytes = await fetch(signatureDataUrl).then((res) =>
+          res.arrayBuffer()
+        );
+        const pngImage = await pdfDoc.embedPng(sigImageBytes);
+        const pngDims = pngImage.scale(0.5);
+
+        const lastPage = pdfDoc.getPages().at(-1);
+        const { width } = lastPage.getSize();
+
+        lastPage.drawImage(pngImage, {
+          x: width - pngDims.width - 40, // Right margin
+          y: 40, // Bottom margin
+          width: pngDims.width,
+          height: pngDims.height,
+        });
+
+        const modifiedPdfBytes = await pdfDoc.save();
+        finalBlob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
+      } else if (fileType === "image") {
+        // Load image onto canvas and draw signature on top
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.src = signatureDocUrl;
+
+        await new Promise((res) => (image.onload = res));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext("2d");
+
+        ctx.drawImage(image, 0, 0);
+
+        const sigImg = new Image();
+        sigImg.src = signatureDataUrl;
+
+        await new Promise((res) => (sigImg.onload = res));
+
+        const scale = 0.3;
+        const sigWidth = sigImg.width * scale;
+        const sigHeight = sigImg.height * scale;
+
+        ctx.drawImage(
+          sigImg,
+          canvas.width - sigWidth - 20, // Right margin
+          canvas.height - sigHeight - 20, // Bottom margin
+          sigWidth,
+          sigHeight
+        );
+
+        const mergedDataUrl = canvas.toDataURL("image/png");
+        finalBlob = await (await fetch(mergedDataUrl)).blob();
+      } else {
+        alert(
+          "This file type can't be signed directly. Please upload a PDF or image."
+        );
+        return;
+      }
+
+      // Prepare for upload
+      const formData = new FormData();
+      const nameBase = signatureDocName.split(".")[0];
+      const extension = fileType === "pdf" ? "pdf" : "png";
+      const finalFileName = `${nameBase}-signed.${extension}`;
+
+      formData.append("file", finalBlob, finalFileName);
+
+      const res = await axios.post(`${backendUrl}/api/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const signalData = {
+        name: finalFileName,
+        url: res.data.url,
+      };
+
+      sessionRef.current.signal(
+        {
+          type: "signed-document",
+          data: JSON.stringify(signalData),
+        },
+        (err) => {
+          if (err) {
+            console.error("Signal error:", err);
+            setError("Failed to send signed document.");
+          } else {
+            console.log("✅ Signed document shared:", signalData);
+            setSignatureModalOpen(false);
+            setSignatureDocUrl(null);
+            setSignatureDocName(null);
+          }
+        }
+      );
+    } catch (err) {
+      console.error("❌ Error signing document:", err);
+      setError("Failed to sign document.");
+    }
+  };
+
   const handleCloseFilePreviewDialog = () => {
     console.log("🔐 File dialog closed");
     setShowUploadedDialog(false);
@@ -310,6 +430,18 @@ const CustomerPage = () => {
       }
     };
 
+    const handleSignaturePreview = (event) => {
+      console.log("📡 Received file-for-signing signal:", event.data);
+      try {
+        const parsed = JSON.parse(event.data);
+        setSignatureDocUrl(parsed.url);
+        setSignatureDocName(parsed.name);
+        setSignatureModalOpen(true);
+      } catch (err) {
+        console.error("Failed to parse file-for-signing signal data:", err);
+      }
+    };
+
     session.on("signal", signalHandler);
     session.on("signal:callAccepted", handleCallAccepted);
     session.on("streamCreated", handleStreamCreated);
@@ -318,6 +450,8 @@ const CustomerPage = () => {
     session.on("signal:file-request", handleFileUpload);
     session.on("signal:file-share", handleFileUpload);
     session.on("signal:file-preview-closed", handleCloseFilePreviewDialog);
+    session.on("signal:file-for-signing", handleSignaturePreview);
+
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
     return () => {
@@ -326,6 +460,12 @@ const CustomerPage = () => {
       session.off("streamCreated", handleStreamCreated);
       session.off("signal:endCall", handleEndCall);
       session.off("signal:callAccepted", handleCallAccepted);
+      session.off("signal:video-assist", handleVideoAssist);
+      session.off("signal:file-request", handleFileUpload);
+      session.off("signal:file-share", handleFileUpload);
+      session.off("signal:file-preview-closed", handleCloseFilePreviewDialog);
+      session.off("signal:file-for-signing", handleSignaturePreview);
+
       if (publisher.current) {
         publisher.current.destroy();
         console.log("🗑️ Destroyed publisher");
@@ -735,6 +875,79 @@ const CustomerPage = () => {
                 <Typography color="error">Preview not available.</Typography>
               )}
             </DialogContent>
+          </Dialog>
+
+          {/* Dialog for signing a file */}
+          <Dialog
+            open={signatureModalOpen}
+            onClose={() => setSignatureModalOpen(false)}
+            maxWidth="md"
+            fullWidth
+          >
+            <DialogTitle>Sign Document: {signatureDocName}</DialogTitle>
+            <DialogContent
+              dividers
+              sx={{ display: "flex", flexDirection: "column", gap: 2 }}
+            >
+              {signatureDocUrl && (
+                <iframe
+                  src={signatureDocUrl}
+                  title="Document to Sign"
+                  width="100%"
+                  height="400px"
+                  style={{ border: "none" }}
+                />
+              )}
+
+              <Box
+                sx={{
+                  border: "1px solid #ccc",
+                  borderRadius: 1,
+                  height: 200,
+                }}
+              >
+                <SignatureCanvas
+                  penColor="black"
+                  ref={sigPadRef}
+                  canvasProps={{
+                    width: 600,
+                    height: 200,
+                    className: "sigCanvas",
+                    style: {
+                      width: "100%",
+                      height: "200px",
+                      borderRadius: 8,
+                    },
+                  }}
+                />
+              </Box>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                onClick={() => {
+                  if (sigPadRef.current) sigPadRef.current.clear();
+                }}
+              >
+                Clear
+              </Button>
+              <Button
+                onClick={() => {
+                  if (!sigPadRef.current || sigPadRef.current.isEmpty()) {
+                    alert("Please provide your signature.");
+                    return;
+                  }
+                  const dataUrl = sigPadRef.current
+                    .getCanvas()
+                    .toDataURL("image/png");
+
+                  handleSendSignedDocument(dataUrl);
+                }}
+                variant="contained"
+                color="primary"
+              >
+                Send Signed Document
+              </Button>
+            </DialogActions>
           </Dialog>
         </Box>
       </Paper>
