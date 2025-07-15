@@ -48,6 +48,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [customerFileUrl, setCustomerFileUrl] = useState(null);
   const [customerFileDialogOpen, setCustomerFileDialogOpen] = useState(false);
+  const [customerFileName, setCustomerFileName] = useState(null);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -215,6 +216,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             const data = JSON.parse(event.data);
             if (data.url) {
               setCustomerFileUrl(data.url);
+              setCustomerFileName(data.name || null);
               setCustomerFileDialogOpen(true);
             }
           } catch (err) {
@@ -420,6 +422,25 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     // Reset all customer file related state
     setCustomerFileUrl(null);
     setCustomerFileDialogOpen(false);
+  };
+
+  const getFileType = (url, name) => {
+    const extension = name?.split(".").pop().toLowerCase();
+
+    // Simple checks for common types
+    if (!extension) return "unknown";
+
+    if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"].includes(extension))
+      return "image";
+
+    if (["mp4", "webm", "ogg", "mov", "avi"].includes(extension))
+      return "video";
+
+    if (["mp3", "wav", "ogg", "m4a"].includes(extension)) return "audio";
+
+    if (["pdf"].includes(extension)) return "pdf";
+
+    return "unknown";
   };
 
   const renderFallbackAvatar = (label = "You") => (
@@ -708,7 +729,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
       <input
         type="file"
-        accept="application/pdf"
+        accept="*/*"
         ref={fileInputRef}
         style={{ display: "none" }}
         onChange={async (e) => {
@@ -770,13 +791,63 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         <DialogTitle id="uploaded-file-dialog-title">File Preview</DialogTitle>
         <DialogContent dividers>
           {customerFileUrl ? (
-            <iframe
-              src={customerFileUrl}
-              title="Uploaded PDF Preview"
-              width="100%"
-              height="600px"
-              style={{ border: "none" }}
-            />
+            (() => {
+              const fileType = getFileType(customerFileUrl, customerFileName);
+
+              switch (fileType) {
+                case "image":
+                  return (
+                    <img
+                      src={customerFileUrl}
+                      alt={customerFileName}
+                      style={{
+                        width: "100%",
+                        maxHeight: 600,
+                        objectFit: "contain",
+                      }}
+                    />
+                  );
+                case "video":
+                  return (
+                    <video
+                      src={customerFileUrl}
+                      controls
+                      style={{ width: "100%", maxHeight: 600 }}
+                    />
+                  );
+                case "audio":
+                  return (
+                    <audio
+                      src={customerFileUrl}
+                      controls
+                      style={{ width: "100%" }}
+                    />
+                  );
+                case "pdf":
+                  return (
+                    <iframe
+                      src={customerFileUrl}
+                      title="Uploaded PDF Preview"
+                      width="100%"
+                      height="600px"
+                      style={{ border: "none" }}
+                    />
+                  );
+                default:
+                  return (
+                    <Typography>
+                      Preview not available for this file type.{" "}
+                      <a
+                        href={customerFileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Click here to download.
+                      </a>
+                    </Typography>
+                  );
+              }
+            })()
           ) : (
             <Typography color="error">Preview not available.</Typography>
           )}

@@ -35,6 +35,7 @@ const CustomerPage = () => {
   const [fileUploadRequested, setFileUploadRequested] = useState(false);
   const [showUploadedDialog, setShowUploadedDialog] = useState(false);
   const [filePreviewUrl, setFilePreviewUrl] = useState(null);
+  const [filePreviewName, setFilePreviewName] = useState(null);
 
   // ⬇ Refs
   const fileInputRef = useRef(null);
@@ -216,6 +217,24 @@ const CustomerPage = () => {
     setFilePreviewUrl(null);
   };
 
+  const getFileType = (url, name) => {
+    const extension = name?.split(".").pop().toLowerCase();
+
+    if (!extension) return "unknown";
+
+    if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"].includes(extension))
+      return "image";
+
+    if (["mp4", "webm", "ogg", "mov", "avi"].includes(extension))
+      return "video";
+
+    if (["mp3", "wav", "ogg", "m4a"].includes(extension)) return "audio";
+
+    if (["pdf"].includes(extension)) return "pdf";
+
+    return "unknown";
+  };
+
   useEffect(() => {
     console.log("🟢 useEffect (token) started");
     const session = sessionRef.current;
@@ -264,11 +283,11 @@ const CustomerPage = () => {
       if (event.type === "signal:file-share") {
         try {
           const parsed = JSON.parse(event.data);
-          console.log("📎 Received file from agent:", parsed.name);
           setFilePreviewUrl(parsed.url);
+          setFilePreviewName(parsed.name); // Save the file name here
           setShowUploadedDialog(true);
         } catch (err) {
-          console.error("❌ Failed to parse file signal:", err);
+          console.error("Failed to parse file signal:", err);
         }
       }
 
@@ -320,10 +339,10 @@ const CustomerPage = () => {
     setShowUploadedDialog,
     setError,
     backendUrl,
-    setFilePreviewUrl, // add this prop in your call
+    setFilePreviewUrl,
   }) => {
-    if (!file || file.type !== "application/pdf") {
-      setError("Only PDF files are supported.");
+    if (!file) {
+      setError("No file selected.");
       return;
     }
 
@@ -339,6 +358,7 @@ const CustomerPage = () => {
       const fileData = {
         name: res.data.name,
         url: res.data.url,
+        type: file.type,
       };
 
       session.signal(
@@ -352,7 +372,7 @@ const CustomerPage = () => {
             setError("Failed to share file.");
           } else {
             console.log("📡 File shared via signal:", fileData);
-            setFilePreviewUrl(res.data.url); // <<<< SET THIS
+            setFilePreviewUrl(res.data.url);
             setShowUploadedDialog(true);
           }
         }
@@ -587,14 +607,12 @@ const CustomerPage = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf"
+            accept="*/*" // accept all types
             style={{ display: "none" }}
             onChange={async (e) => {
               const file = e.target.files[0];
               const session = sessionRef.current;
-
               if (!file || !session) return;
-
               await uploadAndShareFile({
                 file,
                 session,
@@ -656,13 +674,63 @@ const CustomerPage = () => {
             </DialogTitle>
             <DialogContent dividers>
               {filePreviewUrl ? (
-                <iframe
-                  src={filePreviewUrl}
-                  title="Uploaded PDF Preview"
-                  width="100%"
-                  height="600px"
-                  style={{ border: "none" }}
-                />
+                (() => {
+                  const fileType = getFileType(filePreviewUrl, filePreviewName);
+
+                  switch (fileType) {
+                    case "image":
+                      return (
+                        <img
+                          src={filePreviewUrl}
+                          alt={filePreviewName}
+                          style={{
+                            width: "100%",
+                            maxHeight: 600,
+                            objectFit: "contain",
+                          }}
+                        />
+                      );
+                    case "video":
+                      return (
+                        <video
+                          src={filePreviewUrl}
+                          controls
+                          style={{ width: "100%", maxHeight: 600 }}
+                        />
+                      );
+                    case "audio":
+                      return (
+                        <audio
+                          src={filePreviewUrl}
+                          controls
+                          style={{ width: "100%" }}
+                        />
+                      );
+                    case "pdf":
+                      return (
+                        <iframe
+                          src={filePreviewUrl}
+                          title="Uploaded PDF Preview"
+                          width="100%"
+                          height="600px"
+                          style={{ border: "none" }}
+                        />
+                      );
+                    default:
+                      return (
+                        <Typography>
+                          Preview not available for this file type.{" "}
+                          <a
+                            href={filePreviewUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Click here to download.
+                          </a>
+                        </Typography>
+                      );
+                  }
+                })()
               ) : (
                 <Typography color="error">Preview not available.</Typography>
               )}
