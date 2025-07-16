@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import OT from "@opentok/client";
+import CobrowseIO from "cobrowse-sdk-js";
 import {
   Box,
   Paper,
@@ -26,12 +27,14 @@ import {
   Description,
   CallEnd,
   Close as CloseIcon,
+  Cast,
 } from "@mui/icons-material";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
 import { Document, Page, pdfjs } from "react-pdf";
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const cobrowseLicenseKey = import.meta.env.VITE_COBROWSE_LICENSE_KEY;
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
 const ENABLE_AGENT_AUDIO = import.meta.env.VITE_AGENT_ENABLE_AUDIO === "true";
 
@@ -53,6 +56,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [signedDocUrl, setSignedDocUrl] = useState(null);
   const [signedDocName, setSignedDocName] = useState(null);
   const [signedDocDialogOpen, setSignedDocDialogOpen] = useState(false);
+  const [isCobrowsing, setIsCobrowsing] = useState(false);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -61,6 +65,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const webcamPublisherRef = useRef(null);
   const screenPublisherRef = useRef(null);
   const publisherContainerRef = useRef(null);
+  const cobrowseSessionRef = useRef(null);
 
   const ensureMediaAccess = async () => {
     if (!ENABLE_AGENT_VIDEO && !ENABLE_AGENT_AUDIO) return true;
@@ -70,6 +75,70 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     });
     return true;
   };
+
+  // Initialize Cobrowse.io SDK
+  useEffect(() => {
+    if (!cobrowseLicenseKey) {
+      console.error("❌ Cobrowse.io license key is missing");
+      setIsCobrowsing(false);
+      return;
+    }
+
+    console.log("🟢 Initializing Cobrowse.io SDK");
+    CobrowseIO.license = cobrowseLicenseKey;
+    CobrowseIO.debug = true;
+
+    CobrowseIO.client()
+      .then(() => {
+        CobrowseIO.start();
+        console.log("✅ Cobrowse.io SDK started");
+
+        // Add click event listener
+        CobrowseIO.on("click", (event) => {
+          console.log("🖱️ Customer click received:", event);
+          if (event.element) {
+            const el = document.querySelector(event.element);
+            if (el) {
+              el.style.transition = "box-shadow 0.3s";
+              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 0, 0.5)";
+              setTimeout(() => {
+                el.style.boxShadow = "none";
+              }, 500);
+            }
+          }
+        });
+
+        if (CobrowseIO.currentSession) {
+          setIsCobrowsing(true);
+          console.log("🔗 Existing co-browsing session detected");
+        }
+
+        CobrowseIO.on("session.action", (action) => {
+          console.log("📡 Cobrowse action:", action);
+        });
+
+        // Add session update and error handlers
+        CobrowseIO.on("session.updated", (session) => {
+          console.log("🔄 Cobrowse session updated:", session.state());
+          setIsCobrowsing(session.state() === "active");
+        });
+
+        CobrowseIO.on("session.error", (error) => {
+          console.error("❌ Cobrowse session error:", error);
+          setIsCobrowsing(false);
+        });
+      })
+      .catch((err) => {
+        console.error("❌ Failed to initialize Cobrowse.io:", err);
+        setIsCobrowsing(false);
+      });
+
+    return () => {
+      console.log("🧹 Cleaning up Cobrowse.io SDK");
+      CobrowseIO.stop();
+      setIsCobrowsing(false);
+    };
+  }, []);
 
   useEffect(() => {
     if (!sessionId) {
@@ -94,6 +163,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
         session.connect(token, async (err) => {
           if (err) {
+            console.error("Session connect error:", err);
             return;
           }
 
@@ -236,10 +306,20 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
               setSignedDocUrl(data.url);
               setSignedDocName(data.name || "Signed Document");
               setSignedDocDialogOpen(true);
-              setWaitingForSignedDoc(false); // stop waiting when received
+              setWaitingForSignedDoc(false);
             }
           } catch (err) {
             console.error("Failed to parse signed document signal:", err);
+          }
+        });
+
+        session.on("signal:cobrowse-click", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log("🖱️ Received customer click:", data);
+            // Optionally highlight or process the click (e.g., visually indicate on agent's screen)
+          } catch (err) {
+            console.error("❌ Failed to parse cobrowse-click signal:", err);
           }
         });
       } catch (err) {
@@ -257,15 +337,98 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           sessionRef.current.unpublish(publisherRef.current);
           publisherRef.current.destroy();
         }
-        if (publisherRef.current) {
-          sessionRef.current.unpublish(publisherRef.current);
-          publisherRef.current.destroy();
-        }
         sessionRef.current.disconnect();
         sessionRef.current = null;
       }
+      CobrowseIO.stop();
+      setIsCobrowsing(false);
+      console.log("🛑 Cobrowse.io stopped");
     };
   }, [sessionId, retryMedia]);
+
+  // Start or stop co-browsing
+  const toggleCobrowsing = async () => {
+    if (!cobrowseLicenseKey) {
+      console.error("❌ Cobrowse.io license key is missing");
+      return;
+    }
+
+    if (isCobrowsing) {
+      console.log("🛑 Stopping co-browsing session");
+      CobrowseIO.stop();
+      setIsCobrowsing(false);
+      if (cobrowseSessionRef.current) {
+        cobrowseSessionRef.current.end();
+        cobrowseSessionRef.current = null;
+      }
+      sessionRef.current?.signal(
+        {
+          type: "cobrowsing",
+          data: JSON.stringify({ action: "stop" }),
+        },
+        (err) => err && console.error("❌ Signal error:", err)
+      );
+    } else {
+      try {
+        await CobrowseIO.client();
+        const session = await CobrowseIO.createSession();
+        const sessionCode = session.code();
+        const sessionUrl = `https://cobrowse.io/s/${sessionCode}`;
+        cobrowseSessionRef.current = session;
+
+        // Add click event listener for customer clicks
+        CobrowseIO.on("click", (event) => {
+          console.log("🖱️ Customer click received:", event);
+          if (event.element) {
+            const el = document.querySelector(event.element);
+            if (el) {
+              el.style.transition = "box-shadow 0.3s";
+              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 0, 0.5)";
+              setTimeout(() => {
+                el.style.boxShadow = "none";
+              }, 500);
+            }
+          }
+        });
+
+        // Handle session updates
+        CobrowseIO.on("session.updated", (session) => {
+          console.log("🔄 Agent cobrowse session updated:", session.state());
+          setIsCobrowsing(session.state() === "active");
+        });
+
+        // Handle session errors
+        CobrowseIO.on("session.error", (error) => {
+          console.error("❌ Agent cobrowse session error:", error);
+          setIsCobrowsing(false);
+        });
+
+        setIsCobrowsing(true);
+        sessionRef.current?.signal(
+          {
+            type: "cobrowsing",
+            data: JSON.stringify({ action: "start", sessionCode, sessionUrl }),
+          },
+          (err) => {
+            if (err) {
+              console.error("❌ Signal error:", err);
+              setIsCobrowsing(false);
+              if (cobrowseSessionRef.current) cobrowseSessionRef.current.end();
+            } else {
+              console.log("📡 Sent cobrowsing start signal:", sessionCode);
+            }
+          }
+        );
+      } catch (err) {
+        console.error("❌ Failed to start Cobrowse session:", err);
+        if (cobrowseSessionRef.current) {
+          cobrowseSessionRef.current.end();
+          cobrowseSessionRef.current = null;
+        }
+        setIsCobrowsing(false);
+      }
+    }
+  };
 
   const toggleVideo = async () => {
     const pub = webcamPublisherRef.current;
@@ -300,7 +463,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
-      // Stop screen sharing: unpublish screen, publish webcam
       if (screenPublisherRef.current && sessionRef.current) {
         sessionRef.current.unpublish(screenPublisherRef.current);
         screenPublisherRef.current.destroy();
@@ -311,7 +473,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       }
       setIsScreenSharing(false);
     } else {
-      // Start screen sharing: unpublish webcam, publish screen
       if (!sessionRef.current) return;
 
       try {
@@ -396,6 +557,14 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       );
       sessionRef.current.disconnect();
     }
+    CobrowseIO.stop();
+    setIsCobrowsing(false);
+    if (cobrowseSessionRef.current) {
+      cobrowseSessionRef.current.end(); // Optional
+      cobrowseSessionRef.current = null;
+    }
+
+    console.log("🛑 Cobrowse.io stopped");
     onCallEnd();
   };
 
@@ -412,7 +581,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       }
     );
 
-    // Reset all customer file related state
     setCustomerFileUrl(null);
     setCustomerFileDialogOpen(false);
   };
@@ -420,7 +588,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const getFileType = (url, name) => {
     const extension = name?.split(".").pop().toLowerCase();
 
-    // Simple checks for common types
     if (!extension) return "unknown";
 
     if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"].includes(extension))
@@ -551,6 +718,16 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         </IconButton>
       </Tooltip>
 
+      <Tooltip title={isCobrowsing ? "Stop Co-browsing" : "Start Co-browsing"}>
+        <IconButton
+          onClick={toggleCobrowsing}
+          sx={{ color: isCobrowsing ? "lime" : "white" }}
+          disabled={!cobrowseLicenseKey}
+        >
+          <Cast />
+        </IconButton>
+      </Tooltip>
+
       <Tooltip title="Upload File">
         <IconButton component="label" sx={{ color: "white" }}>
           <UploadFile onClick={() => setUploadDialogOpen(true)} />
@@ -591,7 +768,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       const uploadedFileUrl = res.data.url;
       const signalType = type === "sign" ? "file-for-signing" : "file-preview";
 
-      // Send signal with the uploaded file URL
       sessionRef.current?.signal(
         {
           type: signalType,
@@ -605,7 +781,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             console.error("Signal send error:", err);
           } else {
             if (type === "sign") {
-              // Show waiting for signed doc modal
               setWaitingForSignedDoc(true);
             } else {
               setCustomerFileUrl(uploadedFileUrl);
@@ -754,7 +929,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             variant="contained"
             onClick={() => {
               setUploadDialogOpen(false);
-              fileInputRef.current.click(); // trigger file picker
+              fileInputRef.current.click();
             }}
             sx={{ m: 1 }}
           >
@@ -764,7 +939,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             variant="outlined"
             onClick={() => {
               setUploadDialogOpen(false);
-              // Send OpenTok signal to customer
               sessionRef.current?.signal(
                 {
                   type: "file-request",
@@ -943,7 +1117,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                 default:
                   return (
                     <Typography>
-                      Preview not available for this file type.{" "}
+                      Preview not available for this file type.
                       <a href={signedDocUrl} target="_blank" rel="noreferrer">
                         Click here to download.
                       </a>
@@ -956,23 +1130,18 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           )}
         </DialogContent>
         <DialogActions>
-          <DialogActions>
-            {signedDocUrl && (
-              <Button
-                variant="contained"
-                color="primary"
-                onClick={handleDownloadAndSignal}
-              >
-                Download
-              </Button>
-            )}
+          {signedDocUrl && (
             <Button
-              onClick={() => setSignedDocDialogOpen(false)}
+              variant="contained"
               color="primary"
+              onClick={handleDownloadAndSignal}
             >
-              Close
+              Download
             </Button>
-          </DialogActions>
+          )}
+          <Button onClick={() => setSignedDocDialogOpen(false)} color="primary">
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
     </Paper>

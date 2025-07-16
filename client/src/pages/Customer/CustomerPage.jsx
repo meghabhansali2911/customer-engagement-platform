@@ -1,9 +1,10 @@
-// ⬇ Import statements remain unchanged
 import React, { useState, useRef, useEffect } from "react";
 import OT from "@opentok/client";
 import SignatureCanvas from "react-signature-canvas";
 import axios from "axios";
 import { PDFDocument } from "pdf-lib";
+import CobrowseIO from "cobrowse-sdk-js";
+
 import {
   Box,
   Button,
@@ -18,13 +19,13 @@ import {
   DialogActions,
 } from "@mui/material";
 
-// ⬇ Backend URL
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const cobrowseLicenseKey = import.meta.env.VITE_COBROWSE_LICENSE_KEY;
 
 const CustomerPage = () => {
   console.log("🔵 CustomerPage component initialized");
 
-  // ⬇ State Declarations
+  // State Declarations
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [checkingDevices, setCheckingDevices] = useState(false);
@@ -41,16 +42,18 @@ const CustomerPage = () => {
   const [signatureDocUrl, setSignatureDocUrl] = useState(null);
   const [signatureDocName, setSignatureDocName] = useState(null);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
+  const [isCobrowsing, setIsCobrowsing] = useState(false);
+  const [cobrowseSignalData, setCobrowseSignalData] = useState(null);
 
-  // ⬇ Refs
+  // Refs
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
   const publisherRef = useRef(null);
   const subscriberRef = useRef(null);
   const publisher = useRef(null);
   const sigPadRef = useRef(null);
+  const cobrowseClientRef = useRef(null);
 
-  // ⬇ Render fallback avatar box
   const renderFallbackAvatar = (label = "You") => {
     console.log("🔹 renderFallbackAvatar called with label:", label);
     return (
@@ -85,6 +88,52 @@ const CustomerPage = () => {
     );
   };
 
+  useEffect(() => {
+    const initPublisher = async () => {
+      console.log("📽️ Attempting to initialize publisher...");
+
+      const session = sessionRef.current;
+      if (!session || !publisherRef.current || publisher.current) {
+        return;
+      }
+
+      publisher.current = OT.initPublisher(
+        publisherRef.current,
+        {
+          insertMode: "append",
+          width: "100%",
+          height: "100%",
+          publishAudio: true,
+          publishVideo: true,
+        },
+        (err) => {
+          if (err) {
+            console.error("❌ Publisher init error:", err);
+            setError("Could not access camera/mic.");
+            return;
+          }
+          console.log("✅ Publisher initialized.");
+        }
+      );
+
+      session.publish(publisher.current, (err) => {
+        if (err) {
+          console.error("❌ Publishing failed:", err);
+          setError("Publishing to session failed.");
+        } else {
+          console.log("✅ Published to session.");
+        }
+      });
+
+      publisher.current.on("videoEnabled", () => setPublisherHasVideo(true));
+      publisher.current.on("videoDisabled", () => setPublisherHasVideo(false));
+    };
+
+    if (joined && !waitingForAgent && publisherRef.current) {
+      initPublisher();
+    }
+  }, [joined, waitingForAgent, publisherRef]);
+
   const handleJoin = async () => {
     console.log("🔹 handleJoin started");
 
@@ -98,13 +147,13 @@ const CustomerPage = () => {
     setError("");
 
     try {
-      console.log("🎤 Checking mic access...");
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: false,
+      console.log("🎥 Requesting media permissions...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
         audio: true,
       });
-      mediaStream.getTracks().forEach((t) => t.stop());
-      console.log("🎤 Mic access granted.");
+      stream.getTracks().forEach((track) => track.stop());
+      console.log("🎥 Media permissions granted.");
 
       const res = await axios.post(`${backendUrl}/api/call-request`, { name });
       const { apiKey, sessionId, token } = res.data;
@@ -152,67 +201,54 @@ const CustomerPage = () => {
       return;
     }
 
-    try {
-      console.log("🎥 Requesting media permissions...");
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-      stream.getTracks().forEach((track) => track.stop());
-      console.log("🎥 Media permissions granted.");
-
-      if (!publisherRef.current) {
-        console.error("❌ Publisher container ref is null.");
-        setError("Unable to initialize publisher view.");
-        return;
-      }
-
-      publisher.current = OT.initPublisher(
-        publisherRef.current,
-        {
-          insertMode: "append",
-          width: "100%",
-          height: "100%",
-          publishAudio: true,
-          publishVideo: true,
-        },
-        (err) => {
-          if (err) {
-            console.error("❌ Publisher init error:", err);
-            setError("Could not access camera/mic.");
-            return;
-          }
-          console.log("✅ Publisher initialized.");
-        }
-      );
-
-      if (!publisher.current) {
-        console.error("❌ OT.initPublisher returned null.");
-        setError("Failed to initialize publisher.");
-        return;
-      }
-
-      session.publish(publisher.current, (err) => {
-        if (err) {
-          console.error("❌ Publishing failed:", err);
-          setError("Publishing to session failed.");
-        } else {
-          console.log("✅ Published to session.");
-        }
-      });
-
-      publisher.current.on("videoEnabled", () => {
-        console.log("🎥 Publisher video enabled");
-        setPublisherHasVideo(true);
-      });
-      publisher.current.on("videoDisabled", () => {
-        console.log("📵 Publisher video disabled");
-        setPublisherHasVideo(false);
-      });
-    } catch (err) {
-      console.error("❌ handleCallAccepted error:", err);
-      setError("Camera/Mic permissions denied or unavailable.");
+    if (!publisherRef.current) {
+      console.error("❌ Publisher container ref is null.");
+      setError("Unable to initialize publisher view.");
+      return;
     }
+
+    publisher.current = OT.initPublisher(
+      publisherRef.current,
+      {
+        insertMode: "append",
+        width: "100%",
+        height: "100%",
+        publishAudio: true,
+        publishVideo: true,
+      },
+      (err) => {
+        if (err) {
+          console.error("❌ Publisher init error:", err);
+          setError("Could not access camera/mic.");
+          return;
+        }
+        console.log("✅ Publisher initialized.");
+      }
+    );
+
+    if (!publisher.current) {
+      console.error("❌ OT.initPublisher returned null.");
+      setError("Failed to initialize publisher.");
+      return;
+    }
+
+    session.publish(publisher.current, (err) => {
+      if (err) {
+        console.error("❌ Publishing failed:", err);
+        setError("Publishing to session failed.");
+      } else {
+        console.log("✅ Published to session.");
+      }
+    });
+
+    publisher.current.on("videoEnabled", () => {
+      console.log("🎥 Publisher video enabled");
+      setPublisherHasVideo(true);
+    });
+    publisher.current.on("videoDisabled", () => {
+      console.log("📵 Publisher video disabled");
+      setPublisherHasVideo(false);
+    });
 
     console.log("🔹 handleCallAccepted ended");
   };
@@ -242,8 +278,8 @@ const CustomerPage = () => {
         const { width } = lastPage.getSize();
 
         lastPage.drawImage(pngImage, {
-          x: width - pngDims.width - 40, // Right margin
-          y: 40, // Bottom margin
+          x: width - pngDims.width - 40,
+          y: 40,
           width: pngDims.width,
           height: pngDims.height,
         });
@@ -251,7 +287,6 @@ const CustomerPage = () => {
         const modifiedPdfBytes = await pdfDoc.save();
         finalBlob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
       } else if (fileType === "image") {
-        // Load image onto canvas and draw signature on top
         const image = new Image();
         image.crossOrigin = "anonymous";
         image.src = signatureDocUrl;
@@ -276,8 +311,8 @@ const CustomerPage = () => {
 
         ctx.drawImage(
           sigImg,
-          canvas.width - sigWidth - 20, // Right margin
-          canvas.height - sigHeight - 20, // Bottom margin
+          canvas.width - sigWidth - 20,
+          canvas.height - sigHeight - 20,
           sigWidth,
           sigHeight
         );
@@ -291,7 +326,6 @@ const CustomerPage = () => {
         return;
       }
 
-      // Prepare for upload
       const formData = new FormData();
       const nameBase = signatureDocName.split(".")[0];
       const extension = fileType === "pdf" ? "pdf" : "png";
@@ -391,6 +425,29 @@ const CustomerPage = () => {
       console.log("📴 End call signal received");
       session.disconnect();
       setCallEnded(true);
+      CobrowseIO.stop();
+      setIsCobrowsing(false);
+      console.log("🛑 Cobrowse.io stopped on call end");
+    };
+
+    const handleCobrowsingSignal = (signal) => {
+      try {
+        const data = JSON.parse(signal.data);
+
+        console.log("📡 Received cobrowsing signal:", data);
+
+        if (data.action === "start") {
+          setCobrowseSignalData(data); // triggers the effect to initialize/start session
+        } else if (data.action === "stop") {
+          if (cobrowseClientRef.current) {
+            cobrowseClientRef.current.stop();
+            setIsCobrowsing(false);
+          }
+          setCobrowseSignalData(null);
+        }
+      } catch (error) {
+        console.error("❌ Failed to parse cobrowsing signal:", error);
+      }
     };
 
     const signalHandler = (event) => {
@@ -400,11 +457,14 @@ const CustomerPage = () => {
     const handleFileUpload = (event) => {
       console.log("📡 Received signal:", event.type, event.data);
 
-      if (event.type === "signal:file-share") {
+      if (
+        event.type === "signal:file-share" ||
+        event.type === "signal:file-preview"
+      ) {
         try {
           const parsed = JSON.parse(event.data);
           setFilePreviewUrl(parsed.url);
-          setFilePreviewName(parsed.name); // Save the file name here
+          setFilePreviewName(parsed.name);
           setShowUploadedDialog(true);
         } catch (err) {
           console.error("Failed to parse file signal:", err);
@@ -419,7 +479,6 @@ const CustomerPage = () => {
 
     const handleVideoAssist = (event) => {
       console.log("📡 Received video assist signal:", event.data);
-
       const data = event.data;
       if (data === "enable-video") {
         console.log("📡 Received video assist signal enabled");
@@ -443,12 +502,14 @@ const CustomerPage = () => {
     };
 
     session.on("signal", signalHandler);
-    session.on("signal:callAccepted", handleCallAccepted);
+    session.on("signal:callAccepted", () => setWaitingForAgent(false));
     session.on("streamCreated", handleStreamCreated);
     session.on("signal:endCall", handleEndCall);
+    session.on("signal:cobrowsing", handleCobrowsingSignal);
     session.on("signal:video-assist", handleVideoAssist);
     session.on("signal:file-request", handleFileUpload);
     session.on("signal:file-share", handleFileUpload);
+    session.on("signal:file-preview", handleFileUpload);
     session.on("signal:file-preview-closed", handleCloseFilePreviewDialog);
     session.on("signal:file-for-signing", handleSignaturePreview);
 
@@ -457,21 +518,236 @@ const CustomerPage = () => {
     return () => {
       console.log("🧹 Cleanup for useEffect (token)");
       session.off("signal", signalHandler);
-      session.off("streamCreated", handleStreamCreated);
-      session.off("signal:endCall", handleEndCall);
       session.off("signal:callAccepted", handleCallAccepted);
       session.off("signal:video-assist", handleVideoAssist);
       session.off("signal:file-request", handleFileUpload);
       session.off("signal:file-share", handleFileUpload);
+      session.off("signal:file-preview", handleFileUpload);
       session.off("signal:file-preview-closed", handleCloseFilePreviewDialog);
       session.off("signal:file-for-signing", handleSignaturePreview);
 
       if (publisher.current) {
         publisher.current.destroy();
-        console.log("🗑️ Destroyed publisher");
+        console.log("🗑️ Publisher destroyed");
       }
+      CobrowseIO.stop();
+      setIsCobrowsing(false);
+      console.log("🛑 Cobrowse.io stopped");
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!cobrowseSignalData) {
+      console.log("🟡 No cobrowse signal data, skipping initialization");
+      return;
+    }
+
+    if (!cobrowseLicenseKey) {
+      console.error("❌ Cobrowse.io license key is missing");
+      setError("Co-browsing is unavailable due to missing license key.");
+      return;
+    }
+
+    console.log(
+      "🟢 Initializing Cobrowse.io SDK with signal:",
+      cobrowseSignalData
+    );
+    CobrowseIO.license = cobrowseLicenseKey;
+    CobrowseIO.debug = true;
+
+    let isMounted = true;
+
+    CobrowseIO.client()
+      .then((client) => {
+        if (!isMounted) {
+          console.log("🧹 Component unmounted, skipping Cobrowse.io setup");
+          return;
+        }
+
+        cobrowseClientRef.current = client;
+
+        // Handle click events with visual feedback
+        client.on("click", (event) => {
+          console.log("🖱️ Customer click captured:", event);
+          if (event.element) {
+            const el =
+              document.querySelector(event.element) ||
+              document.querySelector(`[data-cobrowse-id="${event.element}"]`);
+            if (el) {
+              el.style.transition = "box-shadow 0.3s";
+              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 255, 0.5)"; // Cyan for customer
+              setTimeout(() => {
+                el.style.boxShadow = "none";
+              }, 500);
+            } else {
+              console.warn("⚠️ Clicked element not found:", event.element);
+            }
+          }
+          // Send click to agent
+          sessionRef.current?.signal(
+            {
+              type: "cobrowse-click",
+              data: JSON.stringify({
+                x: event.x,
+                y: event.y,
+                element: event.element || "unknown",
+                sessionCode: cobrowseSignalData.sessionCode,
+              }),
+            },
+            (err) => {
+              if (err) console.error("❌ Error sending click signal:", err);
+              else console.log("📡 Click event signaled to agent");
+            }
+          );
+        });
+
+        // Handle session updates
+        client.on("session.updated", (session) => {
+          console.log(
+            "🔄 Customer cobrowse session updated:",
+            session.state(),
+            { sessionCode: cobrowseSignalData.sessionCode }
+          );
+          setIsCobrowsing(session.state() === "active");
+          if (session.state() === "pending") {
+            console.log(
+              "⏳ Customer session is pending, waiting for activation"
+            );
+            setError("Connecting to co-browsing session...");
+            setTimeout(() => {
+              if (session.state() === "pending") {
+                console.error(
+                  "❌ Session stuck in pending state for session:",
+                  cobrowseSignalData.sessionCode
+                );
+                setError("Co-browsing session timed out. Please try again.");
+                setIsCobrowsing(false);
+                if (cobrowseClientRef.current) cobrowseClientRef.current.stop();
+                sessionRef.current?.signal(
+                  {
+                    type: "cobrowsing-error",
+                    data: `Customer failed to join session ${cobrowseSignalData.sessionCode}: Timeout`,
+                  },
+                  (err) => err && console.error("❌ Signal error:", err)
+                );
+              }
+            }, 30000); // 30 seconds
+          } else if (session.state() === "active") {
+            console.log(
+              "✅ Customer session is active, click synchronization enabled for session:",
+              cobrowseSignalData.sessionCode
+            );
+            setError(""); // Clear any pending error
+            // Notify user
+            alert("Co-browsing is now active!");
+          } else if (session.state() === "ended") {
+            console.log(
+              "🛑 Customer session ended for session:",
+              cobrowseSignalData.sessionCode
+            );
+            setIsCobrowsing(false);
+            setError("Co-browsing session ended.");
+          }
+        });
+
+        // Handle session errors
+        client.on("session.error", (error) => {
+          console.error("❌ Customer cobrowse session error:", error, {
+            sessionCode: cobrowseSignalData.sessionCode,
+          });
+          setError(
+            `Co-browsing session error: ${error.message || "Unknown error"}`
+          );
+          setIsCobrowsing(false);
+          sessionRef.current?.signal(
+            {
+              type: "cobrowsing-error",
+              data: `Customer session error for ${
+                cobrowseSignalData.sessionCode
+              }: ${error.message || "Unknown"}`,
+            },
+            (err) => err && console.error("❌ Signal error:", err)
+          );
+        });
+
+        // Start or join the co-browsing session using sessionUrl
+        if (cobrowseSignalData.sessionUrl) {
+          console.log(
+            "🔗 Joining Cobrowse session with URL:",
+            cobrowseSignalData.sessionUrl
+          );
+          client
+            .start({ url: cobrowseSignalData.sessionUrl })
+            .then(() => {
+              console.log(
+                "✅ Successfully started Cobrowse session:",
+                cobrowseSignalData.sessionCode
+              );
+              setIsCobrowsing(true);
+            })
+            .catch((err) => {
+              console.error("❌ Failed to join Cobrowse session:", err, {
+                sessionCode: cobrowseSignalData.sessionCode,
+              });
+              setError(
+                `Failed to join co-browsing session: ${
+                  err.message || "Unknown error"
+                }`
+              );
+              setIsCobrowsing(false);
+              sessionRef.current?.signal(
+                {
+                  type: "cobrowsing-error",
+                  data: `Customer failed to join session ${
+                    cobrowseSignalData.sessionCode
+                  }: ${err.message || "Unknown"}`,
+                },
+                (err) => err && console.error("❌ Signal error:", err)
+              );
+            });
+        } else {
+          console.warn("⚠️ No sessionUrl provided, starting default session");
+          client
+            .start()
+            .then(() => {
+              console.log("✅ Successfully started default Cobrowse session");
+              setIsCobrowsing(true);
+            })
+            .catch((err) => {
+              console.error(
+                "❌ Failed to start default Cobrowse session:",
+                err
+              );
+              setError(
+                `Failed to start co-browsing session: ${
+                  err.message || "Unknown error"
+                }`
+              );
+              setIsCobrowsing(false);
+            });
+        }
+      })
+      .catch((err) => {
+        console.error("❌ Failed to initialize Cobrowse.io SDK:", err);
+        setError(
+          `Failed to initialize co-browsing: ${err.message || "Unknown error"}`
+        );
+        setIsCobrowsing(false);
+      });
+
+    return () => {
+      console.log("🧹 Cleaning up Cobrowse.io SDK");
+      isMounted = false;
+
+      if (cobrowseClientRef.current) {
+        cobrowseClientRef.current.stop();
+        cobrowseClientRef.current = null;
+      }
+
+      setIsCobrowsing(false);
+      setError("");
+    };
+  }, [cobrowseSignalData]);
 
   const uploadAndShareFile = async ({
     file,
@@ -535,6 +811,8 @@ const CustomerPage = () => {
         publisher.current.destroy();
         console.log("🗑️ Publisher destroyed");
       }
+      CobrowseIO.stop();
+      console.log("🛑 Cobrowse.io stopped");
     };
   }, []);
 
@@ -638,7 +916,6 @@ const CustomerPage = () => {
 
   if (joined && waitingForAgent) {
     console.log("⏳ Rendering waiting for agent screen");
-
     return (
       <Box
         sx={{
@@ -684,10 +961,15 @@ const CustomerPage = () => {
       >
         <Typography variant="h6" textAlign="center" mb={2}>
           Connected as {name}
+          {isCobrowsing && (
+            <Typography variant="body2" color="lime" component="span">
+              {" "}
+              • Co-browsing Active
+            </Typography>
+          )}
         </Typography>
 
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          {/* Always show Publisher */}
           <Box
             sx={{
               flex: 1,
@@ -695,7 +977,7 @@ const CustomerPage = () => {
               borderRadius: 2,
               bgcolor: "#222",
               overflow: "hidden",
-              height: subscriberHasVideo ? "50%" : "100%", // dynamic height
+              height: subscriberHasVideo ? "50%" : "100%",
             }}
           >
             {!publisherHasVideo && renderFallbackAvatar(name || "You")}
@@ -713,41 +995,36 @@ const CustomerPage = () => {
               }}
             />
           </Box>
-
-          {/* Only show Subscriber if video exists */}
-          {subscriberHasVideo && (
+          <Box
+            sx={{
+              flex: 1,
+              position: "relative",
+              borderRadius: 2,
+              bgcolor: "#333",
+              overflow: "hidden",
+              height: subscriberHasVideo ? "50%" : "100%",
+            }}
+          >
+            {!subscriberHasVideo && renderFallbackAvatar("Agent")}
             <Box
+              ref={subscriberRef}
               sx={{
-                flex: 1,
-                position: "relative",
-                borderRadius: 2,
-                bgcolor: "#333",
-                overflow: "hidden",
-                height: "50%", // shared height
+                width: "100%",
+                height: "100%",
+                "& video, & div": {
+                  width: "100% !important",
+                  height: "100% !important",
+                  objectFit: "cover",
+                  borderRadius: 2,
+                },
               }}
-            >
-              {!subscriberHasVideo && renderFallbackAvatar("Agent")}
-              <Box
-                ref={subscriberRef}
-                sx={{
-                  width: "100%",
-                  height: "100%",
-                  "& video, & div": {
-                    width: "100% !important",
-                    height: "100% !important",
-                    objectFit: "cover",
-                    borderRadius: 2,
-                  },
-                }}
-              />
-            </Box>
-          )}
+            />
+          </Box>
 
-          {/* Hidden file input */}
           <input
             ref={fileInputRef}
             type="file"
-            accept="*/*" // accept all types
+            accept="*/*"
             style={{ display: "none" }}
             onChange={async (e) => {
               const file = e.target.files[0];
@@ -764,7 +1041,6 @@ const CustomerPage = () => {
             }}
           />
 
-          {/* Dialog for file upload request */}
           <Dialog
             open={fileUploadRequested}
             onClose={() => setFileUploadRequested(false)}
@@ -801,7 +1077,6 @@ const CustomerPage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Dialog for showing uploaded file */}
           <Dialog
             open={showUploadedDialog}
             onClose={handleCloseFilePreviewDialog}
@@ -877,7 +1152,6 @@ const CustomerPage = () => {
             </DialogContent>
           </Dialog>
 
-          {/* Dialog for signing a file */}
           <Dialog
             open={signatureModalOpen}
             onClose={() => setSignatureModalOpen(false)}
