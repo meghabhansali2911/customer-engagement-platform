@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import OT from "@opentok/client";
-import CobrowseIO from "cobrowse-sdk-js";
 import {
   Box,
   Paper,
@@ -34,7 +33,6 @@ import { Document, Page, pdfjs } from "react-pdf";
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
-const cobrowseLicenseKey = import.meta.env.VITE_COBROWSE_LICENSE_KEY;
 const ENABLE_AGENT_VIDEO = import.meta.env.VITE_AGENT_ENABLE_VIDEO === "true";
 const ENABLE_AGENT_AUDIO = import.meta.env.VITE_AGENT_ENABLE_AUDIO === "true";
 
@@ -65,7 +63,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const webcamPublisherRef = useRef(null);
   const screenPublisherRef = useRef(null);
   const publisherContainerRef = useRef(null);
-  const cobrowseSessionRef = useRef(null);
 
   const ensureMediaAccess = async () => {
     if (!ENABLE_AGENT_VIDEO && !ENABLE_AGENT_AUDIO) return true;
@@ -75,70 +72,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     });
     return true;
   };
-
-  // Initialize Cobrowse.io SDK
-  useEffect(() => {
-    if (!cobrowseLicenseKey) {
-      console.error("❌ Cobrowse.io license key is missing");
-      setIsCobrowsing(false);
-      return;
-    }
-
-    console.log("🟢 Initializing Cobrowse.io SDK");
-    CobrowseIO.license = cobrowseLicenseKey;
-    CobrowseIO.debug = true;
-
-    CobrowseIO.client()
-      .then(() => {
-        CobrowseIO.start();
-        console.log("✅ Cobrowse.io SDK started");
-
-        // Add click event listener
-        CobrowseIO.on("click", (event) => {
-          console.log("🖱️ Customer click received:", event);
-          if (event.element) {
-            const el = document.querySelector(event.element);
-            if (el) {
-              el.style.transition = "box-shadow 0.3s";
-              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 0, 0.5)";
-              setTimeout(() => {
-                el.style.boxShadow = "none";
-              }, 500);
-            }
-          }
-        });
-
-        if (CobrowseIO.currentSession) {
-          setIsCobrowsing(true);
-          console.log("🔗 Existing co-browsing session detected");
-        }
-
-        CobrowseIO.on("session.action", (action) => {
-          console.log("📡 Cobrowse action:", action);
-        });
-
-        // Add session update and error handlers
-        CobrowseIO.on("session.updated", (session) => {
-          console.log("🔄 Cobrowse session updated:", session.state());
-          setIsCobrowsing(session.state() === "active");
-        });
-
-        CobrowseIO.on("session.error", (error) => {
-          console.error("❌ Cobrowse session error:", error);
-          setIsCobrowsing(false);
-        });
-      })
-      .catch((err) => {
-        console.error("❌ Failed to initialize Cobrowse.io:", err);
-        setIsCobrowsing(false);
-      });
-
-    return () => {
-      console.log("🧹 Cleaning up Cobrowse.io SDK");
-      CobrowseIO.stop();
-      setIsCobrowsing(false);
-    };
-  }, []);
 
   useEffect(() => {
     if (!sessionId) {
@@ -340,94 +273,13 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         sessionRef.current.disconnect();
         sessionRef.current = null;
       }
-      CobrowseIO.stop();
-      setIsCobrowsing(false);
-      console.log("🛑 Cobrowse.io stopped");
     };
   }, [sessionId, retryMedia]);
 
   // Start or stop co-browsing
   const toggleCobrowsing = async () => {
-    if (!cobrowseLicenseKey) {
-      console.error("❌ Cobrowse.io license key is missing");
-      return;
-    }
-
-    if (isCobrowsing) {
-      console.log("🛑 Stopping co-browsing session");
-      CobrowseIO.stop();
-      setIsCobrowsing(false);
-      if (cobrowseSessionRef.current) {
-        cobrowseSessionRef.current.end();
-        cobrowseSessionRef.current = null;
-      }
-      sessionRef.current?.signal(
-        {
-          type: "cobrowsing",
-          data: JSON.stringify({ action: "stop" }),
-        },
-        (err) => err && console.error("❌ Signal error:", err)
-      );
-    } else {
-      try {
-        await CobrowseIO.client();
-        const session = await CobrowseIO.createSession();
-        const sessionCode = session.code();
-        const sessionUrl = `https://cobrowse.io/s/${sessionCode}`;
-        cobrowseSessionRef.current = session;
-
-        // Add click event listener for customer clicks
-        CobrowseIO.on("click", (event) => {
-          console.log("🖱️ Customer click received:", event);
-          if (event.element) {
-            const el = document.querySelector(event.element);
-            if (el) {
-              el.style.transition = "box-shadow 0.3s";
-              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 0, 0.5)";
-              setTimeout(() => {
-                el.style.boxShadow = "none";
-              }, 500);
-            }
-          }
-        });
-
-        // Handle session updates
-        CobrowseIO.on("session.updated", (session) => {
-          console.log("🔄 Agent cobrowse session updated:", session.state());
-          setIsCobrowsing(session.state() === "active");
-        });
-
-        // Handle session errors
-        CobrowseIO.on("session.error", (error) => {
-          console.error("❌ Agent cobrowse session error:", error);
-          setIsCobrowsing(false);
-        });
-
-        setIsCobrowsing(true);
-        sessionRef.current?.signal(
-          {
-            type: "cobrowsing",
-            data: JSON.stringify({ action: "start", sessionCode, sessionUrl }),
-          },
-          (err) => {
-            if (err) {
-              console.error("❌ Signal error:", err);
-              setIsCobrowsing(false);
-              if (cobrowseSessionRef.current) cobrowseSessionRef.current.end();
-            } else {
-              console.log("📡 Sent cobrowsing start signal:", sessionCode);
-            }
-          }
-        );
-      } catch (err) {
-        console.error("❌ Failed to start Cobrowse session:", err);
-        if (cobrowseSessionRef.current) {
-          cobrowseSessionRef.current.end();
-          cobrowseSessionRef.current = null;
-        }
-        setIsCobrowsing(false);
-      }
-    }
+    alert("Co browser feature");
+    setIsCobrowsing(true);
   };
 
   const toggleVideo = async () => {
@@ -463,21 +315,57 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
+      // Stop screen sharing
       if (screenPublisherRef.current && sessionRef.current) {
         sessionRef.current.unpublish(screenPublisherRef.current);
         screenPublisherRef.current.destroy();
         screenPublisherRef.current = null;
       }
-      if (webcamPublisherRef.current && sessionRef.current) {
-        sessionRef.current.publish(webcamPublisherRef.current);
+
+      // Re-initialize webcam publisher after stopping screen sharing
+      if (sessionRef.current && publisherContainerRef.current) {
+        const publisherOptions = {
+          insertMode: "append",
+          width: "100%",
+          height: "100%",
+          name: "Agent",
+          videoSource: ENABLE_AGENT_VIDEO && hasVideoInput ? undefined : null,
+          audioSource: ENABLE_AGENT_AUDIO && hasAudioInput ? undefined : null,
+          video: ENABLE_AGENT_VIDEO && hasVideoInput,
+          audio: ENABLE_AGENT_AUDIO && hasAudioInput,
+        };
+
+        const newWebcamPublisher = OT.initPublisher(
+          publisherContainerRef.current,
+          publisherOptions,
+          (err) => {
+            if (err) {
+              console.error("Re-init webcam publisher error:", err);
+              return;
+            }
+            webcamPublisherRef.current = newWebcamPublisher;
+            publisherRef.current = newWebcamPublisher;
+
+            sessionRef.current.publish(newWebcamPublisher, (pubErr) => {
+              if (pubErr) {
+                console.error("Publish error after screen share stop:", pubErr);
+              } else {
+                setIsScreenSharing(false);
+                setLocalVideoOn(true);
+              }
+            });
+          }
+        );
       }
-      setIsScreenSharing(false);
     } else {
+      // Start screen sharing
       if (!sessionRef.current) return;
 
       try {
         if (webcamPublisherRef.current) {
           sessionRef.current.unpublish(webcamPublisherRef.current);
+          webcamPublisherRef.current.destroy();
+          webcamPublisherRef.current = null;
         }
 
         const screenPublisher = OT.initPublisher(
@@ -493,7 +381,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           (err) => {
             if (err) {
               console.error("Screen publisher init error:", err);
-              console.log("Failed to initialize screen sharing");
               if (webcamPublisherRef.current) {
                 sessionRef.current.publish(webcamPublisherRef.current);
               }
@@ -503,19 +390,18 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             sessionRef.current.publish(screenPublisher, (pubErr) => {
               if (pubErr) {
                 console.error("Screen publish error:", pubErr);
-                console.log("Failed to publish screen stream");
                 if (webcamPublisherRef.current) {
                   sessionRef.current.publish(webcamPublisherRef.current);
                 }
               } else {
                 setIsScreenSharing(true);
+                setLocalVideoOn(false);
               }
             });
           }
         );
       } catch (err) {
         console.error("Screen sharing error:", err);
-        console.log("Could not start screen sharing");
         if (webcamPublisherRef.current && sessionRef.current) {
           sessionRef.current.publish(webcamPublisherRef.current);
         }
@@ -557,14 +443,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       );
       sessionRef.current.disconnect();
     }
-    CobrowseIO.stop();
-    setIsCobrowsing(false);
-    if (cobrowseSessionRef.current) {
-      cobrowseSessionRef.current.end(); // Optional
-      cobrowseSessionRef.current = null;
-    }
 
-    console.log("🛑 Cobrowse.io stopped");
     onCallEnd();
   };
 
@@ -722,7 +601,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         <IconButton
           onClick={toggleCobrowsing}
           sx={{ color: isCobrowsing ? "lime" : "white" }}
-          disabled={!cobrowseLicenseKey}
         >
           <Cast />
         </IconButton>

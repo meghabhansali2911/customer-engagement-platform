@@ -18,7 +18,6 @@
     "@react-pdf-viewer/core": "^3.12.0",
     "@react-pdf-viewer/default-layout": "^3.12.0",
     "axios": "^1.10.0",
-    "cobrowse-sdk-js": "^3.5.0",
     "html2canvas": "^1.4.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^3.11.174",

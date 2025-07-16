@@ -3,7 +3,6 @@ import OT from "@opentok/client";
 import SignatureCanvas from "react-signature-canvas";
 import axios from "axios";
 import { PDFDocument } from "pdf-lib";
-import CobrowseIO from "cobrowse-sdk-js";
 
 import {
   Box,
@@ -20,7 +19,6 @@ import {
 } from "@mui/material";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
-const cobrowseLicenseKey = import.meta.env.VITE_COBROWSE_LICENSE_KEY;
 
 const CustomerPage = () => {
   console.log("🔵 CustomerPage component initialized");
@@ -42,8 +40,6 @@ const CustomerPage = () => {
   const [signatureDocUrl, setSignatureDocUrl] = useState(null);
   const [signatureDocName, setSignatureDocName] = useState(null);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
-  const [isCobrowsing, setIsCobrowsing] = useState(false);
-  const [cobrowseSignalData, setCobrowseSignalData] = useState(null);
 
   // Refs
   const fileInputRef = useRef(null);
@@ -52,7 +48,6 @@ const CustomerPage = () => {
   const subscriberRef = useRef(null);
   const publisher = useRef(null);
   const sigPadRef = useRef(null);
-  const cobrowseClientRef = useRef(null);
 
   const renderFallbackAvatar = (label = "You") => {
     console.log("🔹 renderFallbackAvatar called with label:", label);
@@ -425,29 +420,6 @@ const CustomerPage = () => {
       console.log("📴 End call signal received");
       session.disconnect();
       setCallEnded(true);
-      CobrowseIO.stop();
-      setIsCobrowsing(false);
-      console.log("🛑 Cobrowse.io stopped on call end");
-    };
-
-    const handleCobrowsingSignal = (signal) => {
-      try {
-        const data = JSON.parse(signal.data);
-
-        console.log("📡 Received cobrowsing signal:", data);
-
-        if (data.action === "start") {
-          setCobrowseSignalData(data); // triggers the effect to initialize/start session
-        } else if (data.action === "stop") {
-          if (cobrowseClientRef.current) {
-            cobrowseClientRef.current.stop();
-            setIsCobrowsing(false);
-          }
-          setCobrowseSignalData(null);
-        }
-      } catch (error) {
-        console.error("❌ Failed to parse cobrowsing signal:", error);
-      }
     };
 
     const signalHandler = (event) => {
@@ -505,7 +477,6 @@ const CustomerPage = () => {
     session.on("signal:callAccepted", () => setWaitingForAgent(false));
     session.on("streamCreated", handleStreamCreated);
     session.on("signal:endCall", handleEndCall);
-    session.on("signal:cobrowsing", handleCobrowsingSignal);
     session.on("signal:video-assist", handleVideoAssist);
     session.on("signal:file-request", handleFileUpload);
     session.on("signal:file-share", handleFileUpload);
@@ -530,224 +501,8 @@ const CustomerPage = () => {
         publisher.current.destroy();
         console.log("🗑️ Publisher destroyed");
       }
-      CobrowseIO.stop();
-      setIsCobrowsing(false);
-      console.log("🛑 Cobrowse.io stopped");
     };
   }, [token]);
-
-  useEffect(() => {
-    if (!cobrowseSignalData) {
-      console.log("🟡 No cobrowse signal data, skipping initialization");
-      return;
-    }
-
-    if (!cobrowseLicenseKey) {
-      console.error("❌ Cobrowse.io license key is missing");
-      setError("Co-browsing is unavailable due to missing license key.");
-      return;
-    }
-
-    console.log(
-      "🟢 Initializing Cobrowse.io SDK with signal:",
-      cobrowseSignalData
-    );
-    CobrowseIO.license = cobrowseLicenseKey;
-    CobrowseIO.debug = true;
-
-    let isMounted = true;
-
-    CobrowseIO.client()
-      .then((client) => {
-        if (!isMounted) {
-          console.log("🧹 Component unmounted, skipping Cobrowse.io setup");
-          return;
-        }
-
-        cobrowseClientRef.current = client;
-
-        // Handle click events with visual feedback
-        client.on("click", (event) => {
-          console.log("🖱️ Customer click captured:", event);
-          if (event.element) {
-            const el =
-              document.querySelector(event.element) ||
-              document.querySelector(`[data-cobrowse-id="${event.element}"]`);
-            if (el) {
-              el.style.transition = "box-shadow 0.3s";
-              el.style.boxShadow = "0 0 10px 3px rgba(0, 255, 255, 0.5)"; // Cyan for customer
-              setTimeout(() => {
-                el.style.boxShadow = "none";
-              }, 500);
-            } else {
-              console.warn("⚠️ Clicked element not found:", event.element);
-            }
-          }
-          // Send click to agent
-          sessionRef.current?.signal(
-            {
-              type: "cobrowse-click",
-              data: JSON.stringify({
-                x: event.x,
-                y: event.y,
-                element: event.element || "unknown",
-                sessionCode: cobrowseSignalData.sessionCode,
-              }),
-            },
-            (err) => {
-              if (err) console.error("❌ Error sending click signal:", err);
-              else console.log("📡 Click event signaled to agent");
-            }
-          );
-        });
-
-        // Handle session updates
-        client.on("session.updated", (session) => {
-          console.log(
-            "🔄 Customer cobrowse session updated:",
-            session.state(),
-            { sessionCode: cobrowseSignalData.sessionCode }
-          );
-          setIsCobrowsing(session.state() === "active");
-          if (session.state() === "pending") {
-            console.log(
-              "⏳ Customer session is pending, waiting for activation"
-            );
-            setError("Connecting to co-browsing session...");
-            setTimeout(() => {
-              if (session.state() === "pending") {
-                console.error(
-                  "❌ Session stuck in pending state for session:",
-                  cobrowseSignalData.sessionCode
-                );
-                setError("Co-browsing session timed out. Please try again.");
-                setIsCobrowsing(false);
-                if (cobrowseClientRef.current) cobrowseClientRef.current.stop();
-                sessionRef.current?.signal(
-                  {
-                    type: "cobrowsing-error",
-                    data: `Customer failed to join session ${cobrowseSignalData.sessionCode}: Timeout`,
-                  },
-                  (err) => err && console.error("❌ Signal error:", err)
-                );
-              }
-            }, 30000); // 30 seconds
-          } else if (session.state() === "active") {
-            console.log(
-              "✅ Customer session is active, click synchronization enabled for session:",
-              cobrowseSignalData.sessionCode
-            );
-            setError(""); // Clear any pending error
-            // Notify user
-            alert("Co-browsing is now active!");
-          } else if (session.state() === "ended") {
-            console.log(
-              "🛑 Customer session ended for session:",
-              cobrowseSignalData.sessionCode
-            );
-            setIsCobrowsing(false);
-            setError("Co-browsing session ended.");
-          }
-        });
-
-        // Handle session errors
-        client.on("session.error", (error) => {
-          console.error("❌ Customer cobrowse session error:", error, {
-            sessionCode: cobrowseSignalData.sessionCode,
-          });
-          setError(
-            `Co-browsing session error: ${error.message || "Unknown error"}`
-          );
-          setIsCobrowsing(false);
-          sessionRef.current?.signal(
-            {
-              type: "cobrowsing-error",
-              data: `Customer session error for ${
-                cobrowseSignalData.sessionCode
-              }: ${error.message || "Unknown"}`,
-            },
-            (err) => err && console.error("❌ Signal error:", err)
-          );
-        });
-
-        // Start or join the co-browsing session using sessionUrl
-        if (cobrowseSignalData.sessionUrl) {
-          console.log(
-            "🔗 Joining Cobrowse session with URL:",
-            cobrowseSignalData.sessionUrl
-          );
-          client
-            .start({ url: cobrowseSignalData.sessionUrl })
-            .then(() => {
-              console.log(
-                "✅ Successfully started Cobrowse session:",
-                cobrowseSignalData.sessionCode
-              );
-              setIsCobrowsing(true);
-            })
-            .catch((err) => {
-              console.error("❌ Failed to join Cobrowse session:", err, {
-                sessionCode: cobrowseSignalData.sessionCode,
-              });
-              setError(
-                `Failed to join co-browsing session: ${
-                  err.message || "Unknown error"
-                }`
-              );
-              setIsCobrowsing(false);
-              sessionRef.current?.signal(
-                {
-                  type: "cobrowsing-error",
-                  data: `Customer failed to join session ${
-                    cobrowseSignalData.sessionCode
-                  }: ${err.message || "Unknown"}`,
-                },
-                (err) => err && console.error("❌ Signal error:", err)
-              );
-            });
-        } else {
-          console.warn("⚠️ No sessionUrl provided, starting default session");
-          client
-            .start()
-            .then(() => {
-              console.log("✅ Successfully started default Cobrowse session");
-              setIsCobrowsing(true);
-            })
-            .catch((err) => {
-              console.error(
-                "❌ Failed to start default Cobrowse session:",
-                err
-              );
-              setError(
-                `Failed to start co-browsing session: ${
-                  err.message || "Unknown error"
-                }`
-              );
-              setIsCobrowsing(false);
-            });
-        }
-      })
-      .catch((err) => {
-        console.error("❌ Failed to initialize Cobrowse.io SDK:", err);
-        setError(
-          `Failed to initialize co-browsing: ${err.message || "Unknown error"}`
-        );
-        setIsCobrowsing(false);
-      });
-
-    return () => {
-      console.log("🧹 Cleaning up Cobrowse.io SDK");
-      isMounted = false;
-
-      if (cobrowseClientRef.current) {
-        cobrowseClientRef.current.stop();
-        cobrowseClientRef.current = null;
-      }
-
-      setIsCobrowsing(false);
-      setError("");
-    };
-  }, [cobrowseSignalData]);
 
   const uploadAndShareFile = async ({
     file,
@@ -811,8 +566,6 @@ const CustomerPage = () => {
         publisher.current.destroy();
         console.log("🗑️ Publisher destroyed");
       }
-      CobrowseIO.stop();
-      console.log("🛑 Cobrowse.io stopped");
     };
   }, []);
 
@@ -961,12 +714,6 @@ const CustomerPage = () => {
       >
         <Typography variant="h6" textAlign="center" mb={2}>
           Connected as {name}
-          {isCobrowsing && (
-            <Typography variant="body2" color="lime" component="span">
-              {" "}
-              • Co-browsing Active
-            </Typography>
-          )}
         </Typography>
 
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
