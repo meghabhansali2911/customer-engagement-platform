@@ -40,6 +40,8 @@ const CustomerPage = () => {
   const [signatureDocUrl, setSignatureDocUrl] = useState(null);
   const [signatureDocName, setSignatureDocName] = useState(null);
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
+  const [activeFeature, setActiveFeature] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Refs
   const fileInputRef = useRef(null);
@@ -60,7 +62,7 @@ const CustomerPage = () => {
           alignItems: "center",
           justifyContent: "center",
           bgcolor: "grey.800",
-          zIndex: 1,
+          zIndex: 9999,
           borderRadius: 2,
         }}
       >
@@ -100,6 +102,7 @@ const CustomerPage = () => {
           height: "100%",
           publishAudio: true,
           publishVideo: true,
+          name: name,
         },
         (err) => {
           if (err) {
@@ -210,6 +213,7 @@ const CustomerPage = () => {
         height: "100%",
         publishAudio: true,
         publishVideo: true,
+        name: name,
       },
       (err) => {
         if (err) {
@@ -455,8 +459,10 @@ const CustomerPage = () => {
       if (data === "enable-video") {
         console.log("📡 Received video assist signal enabled");
         setSubscriberHasVideo(false);
+        setActiveFeature("Video Assist");
       } else {
         console.log("📡 Received video assist signal disabled");
+        setActiveFeature("");
         setSubscriberHasVideo(true);
       }
     };
@@ -511,6 +517,7 @@ const CustomerPage = () => {
     setError,
     backendUrl,
     setFilePreviewUrl,
+    setIsUploading,
   }) => {
     if (!file) {
       setError("No file selected.");
@@ -519,6 +526,8 @@ const CustomerPage = () => {
 
     const formData = new FormData();
     formData.append("file", file);
+
+    setIsUploading(true); // Show loader
 
     try {
       console.log("📤 Uploading file to backend...");
@@ -551,6 +560,9 @@ const CustomerPage = () => {
     } catch (err) {
       console.error("❌ File upload failed:", err);
       setError("File upload failed. Please try again.");
+    } finally {
+      // ⏳ Add artificial delay so loader is visible for 2 seconds
+      setIsUploading(false); // Hide loader
     }
   };
 
@@ -712,9 +724,11 @@ const CustomerPage = () => {
           flexDirection: "column",
         }}
       >
-        <Typography variant="h6" textAlign="center" mb={2}>
-          Connected as {name}
-        </Typography>
+        {activeFeature && (
+          <Typography variant="h6" textAlign="center" mb={2}>
+            {activeFeature}
+          </Typography>
+        )}
 
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
           <Box
@@ -742,6 +756,7 @@ const CustomerPage = () => {
               }}
             />
           </Box>
+          {/* Agent Video */}
           <Box
             sx={{
               flex: 1,
@@ -749,7 +764,7 @@ const CustomerPage = () => {
               borderRadius: 2,
               bgcolor: "#333",
               overflow: "hidden",
-              height: subscriberHasVideo ? "50%" : "100%",
+              display: subscriberHasVideo ? "block" : "none", // This properly hides the container
             }}
           >
             {!subscriberHasVideo && renderFallbackAvatar("Agent")}
@@ -784,6 +799,7 @@ const CustomerPage = () => {
                 setError,
                 backendUrl,
                 setFilePreviewUrl,
+                setIsUploading,
               });
             }}
           />
@@ -969,6 +985,18 @@ const CustomerPage = () => {
                 Send Signed Document
               </Button>
             </DialogActions>
+          </Dialog>
+
+          <Dialog open={isUploading} onClose={() => {}} disableEscapeKeyDown>
+            <DialogTitle>Uploading File...</DialogTitle>
+            <DialogContent
+              sx={{ display: "flex", alignItems: "center", gap: 2 }}
+            >
+              <CircularProgress />
+              <Typography>
+                Please wait while the file is being uploaded.
+              </Typography>
+            </DialogContent>
           </Dialog>
         </Box>
       </Paper>

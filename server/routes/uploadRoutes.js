@@ -1,4 +1,3 @@
-// routes/uploadRoutes.js
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -19,8 +18,9 @@ const storage = multer.diskStorage({
   },
 });
 
-// Accept all file types by removing the fileFilter
 const upload = multer({ storage });
+
+const BASE_URL = process.env.BASE_URL || "";
 
 // POST /api/upload
 router.post("/upload", upload.single("file"), (req, res) => {
@@ -30,12 +30,10 @@ router.post("/upload", upload.single("file"), (req, res) => {
       .json({ error: "No file uploaded or invalid file type" });
   }
 
-  console.log("🚀 ~ router.post ~ req.fil:", req.file);
+  const fileUrl = BASE_URL
+    ? `${BASE_URL}/uploads/${req.file.filename}`
+    : `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
 
-  const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${
-    req.file.filename
-  }`;
-  console.log("🚀 ~ fileUrl ~ fileUrl:", fileUrl);
   res.json({ name: req.file.originalname, url: fileUrl });
 });
 

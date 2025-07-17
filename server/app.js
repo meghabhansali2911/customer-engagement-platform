@@ -19,7 +19,17 @@ const apiSecret = process.env.OPENTOK_API_SECRET;
 const opentok = new OpenTok(apiKey, apiSecret);
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "*", // or specific origin
+    methods: ["GET", "POST"],
+  })
+);
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*"); // or specific origin
+  next();
+});
+
 app.use(express.json());
 
 // Static file serving for uploaded PDFs

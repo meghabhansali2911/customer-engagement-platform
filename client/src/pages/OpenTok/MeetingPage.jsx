@@ -41,6 +41,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [localVideoOn, setLocalVideoOn] = useState(ENABLE_AGENT_VIDEO);
   const [localAudioOn, setLocalAudioOn] = useState(ENABLE_AGENT_AUDIO);
   const [remoteVideoOn, setRemoteVideoOn] = useState(false);
+  const [remoteUserName, setRemoteUserName] = useState("Customer");
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [retryMedia, setRetryMedia] = useState(false);
   const [hasVideoInput, setHasVideoInput] = useState(false);
@@ -55,6 +56,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [signedDocName, setSignedDocName] = useState(null);
   const [signedDocDialogOpen, setSignedDocDialogOpen] = useState(false);
   const [isCobrowsing, setIsCobrowsing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -178,6 +180,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           console.log("New stream created:", event.stream);
           setHasRemoteStream(true);
           setRemoteVideoOn(event.stream.hasVideo);
+          setRemoteUserName(event.stream.name);
 
           const subscriber = session.subscribe(
             event.stream,
@@ -313,99 +316,128 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     }
   };
 
+  const initWebcamPublisher = (callback) => {
+    if (!sessionRef.current || !publisherContainerRef.current) return;
+
+    const publisherOptions = {
+      insertMode: "append",
+      width: "100%",
+      height: "100%",
+      name: "Agent",
+      videoSource: ENABLE_AGENT_VIDEO && hasVideoInput ? undefined : null,
+      audioSource: ENABLE_AGENT_AUDIO && hasAudioInput ? undefined : null,
+      video: ENABLE_AGENT_VIDEO && hasVideoInput,
+      audio: ENABLE_AGENT_AUDIO && hasAudioInput,
+    };
+
+    const newWebcamPublisher = OT.initPublisher(
+      publisherContainerRef.current,
+      publisherOptions,
+      (err) => {
+        if (err) {
+          console.error("Webcam publisher init error:", err);
+          if (callback) callback(err);
+          return;
+        }
+
+        webcamPublisherRef.current = newWebcamPublisher;
+        publisherRef.current = newWebcamPublisher;
+
+        sessionRef.current.publish(newWebcamPublisher, (pubErr) => {
+          if (pubErr) {
+            console.error("Publish webcam error:", pubErr);
+          }
+          if (callback) callback(pubErr);
+        });
+      }
+    );
+  };
+
   const toggleScreenShare = async () => {
+    if (!sessionRef.current) return;
+
     if (isScreenSharing) {
       // Stop screen sharing
-      if (screenPublisherRef.current && sessionRef.current) {
+      if (screenPublisherRef.current) {
         sessionRef.current.unpublish(screenPublisherRef.current);
         screenPublisherRef.current.destroy();
         screenPublisherRef.current = null;
       }
 
-      // Re-initialize webcam publisher after stopping screen sharing
-      if (sessionRef.current && publisherContainerRef.current) {
-        const publisherOptions = {
+      // Re-init webcam publisher
+      initWebcamPublisher((err) => {
+        if (!err) {
+          setIsScreenSharing(false);
+          setLocalVideoOn(true);
+        }
+      });
+    } else {
+      // Start screen sharing
+
+      // Unpublish webcam before screen share
+      if (webcamPublisherRef.current) {
+        sessionRef.current.unpublish(webcamPublisherRef.current);
+        webcamPublisherRef.current.destroy();
+        webcamPublisherRef.current = null;
+      }
+
+      const screenPublisher = OT.initPublisher(
+        publisherContainerRef.current,
+        {
           insertMode: "append",
           width: "100%",
           height: "100%",
-          name: "Agent",
-          videoSource: ENABLE_AGENT_VIDEO && hasVideoInput ? undefined : null,
-          audioSource: ENABLE_AGENT_AUDIO && hasAudioInput ? undefined : null,
-          video: ENABLE_AGENT_VIDEO && hasVideoInput,
-          audio: ENABLE_AGENT_AUDIO && hasAudioInput,
-        };
-
-        const newWebcamPublisher = OT.initPublisher(
-          publisherContainerRef.current,
-          publisherOptions,
-          (err) => {
-            if (err) {
-              console.error("Re-init webcam publisher error:", err);
-              return;
+          videoSource: "screen",
+          audioSource: null,
+          publishAudio: false,
+        },
+        (err) => {
+          if (err) {
+            console.error("Screen publisher init error:", err);
+            // Try to re-publish webcam if screen share fails
+            if (webcamPublisherRef.current) {
+              sessionRef.current.publish(webcamPublisherRef.current);
             }
-            webcamPublisherRef.current = newWebcamPublisher;
-            publisherRef.current = newWebcamPublisher;
+            return;
+          }
 
-            sessionRef.current.publish(newWebcamPublisher, (pubErr) => {
-              if (pubErr) {
-                console.error("Publish error after screen share stop:", pubErr);
-              } else {
+          screenPublisherRef.current = screenPublisher;
+
+          // Listen for user manually stopping screen share
+          screenPublisher.on("mediaStopped", () => {
+            console.log("Screen sharing stopped by user");
+
+            if (sessionRef.current && screenPublisherRef.current) {
+              sessionRef.current.unpublish(screenPublisherRef.current);
+              screenPublisherRef.current.destroy();
+              screenPublisherRef.current = null;
+            }
+
+            // Re-init webcam publisher
+            initWebcamPublisher((err) => {
+              if (!err) {
                 setIsScreenSharing(false);
                 setLocalVideoOn(true);
               }
             });
-          }
-        );
-      }
-    } else {
-      // Start screen sharing
-      if (!sessionRef.current) return;
+          });
 
-      try {
-        if (webcamPublisherRef.current) {
-          sessionRef.current.unpublish(webcamPublisherRef.current);
-          webcamPublisherRef.current.destroy();
-          webcamPublisherRef.current = null;
-        }
-
-        const screenPublisher = OT.initPublisher(
-          publisherContainerRef.current,
-          {
-            insertMode: "append",
-            width: "100%",
-            height: "100%",
-            videoSource: "screen",
-            audioSource: null,
-            publishAudio: false,
-          },
-          (err) => {
-            if (err) {
-              console.error("Screen publisher init error:", err);
+          // Publish screen share
+          sessionRef.current.publish(screenPublisher, (pubErr) => {
+            if (pubErr) {
+              console.error("Screen publish error:", pubErr);
+              // Fallback: republish webcam
               if (webcamPublisherRef.current) {
                 sessionRef.current.publish(webcamPublisherRef.current);
               }
               return;
             }
-            screenPublisherRef.current = screenPublisher;
-            sessionRef.current.publish(screenPublisher, (pubErr) => {
-              if (pubErr) {
-                console.error("Screen publish error:", pubErr);
-                if (webcamPublisherRef.current) {
-                  sessionRef.current.publish(webcamPublisherRef.current);
-                }
-              } else {
-                setIsScreenSharing(true);
-                setLocalVideoOn(false);
-              }
-            });
-          }
-        );
-      } catch (err) {
-        console.error("Screen sharing error:", err);
-        if (webcamPublisherRef.current && sessionRef.current) {
-          sessionRef.current.publish(webcamPublisherRef.current);
+
+            setIsScreenSharing(true);
+            setLocalVideoOn(false);
+          });
         }
-      }
+      );
     }
   };
 
@@ -538,6 +570,13 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     </Box>
   );
 
+  const isAnyDialogOpen =
+    uploadDialogOpen ||
+    customerFileDialogOpen ||
+    signedDocDialogOpen ||
+    waitingForSignedDoc ||
+    isUploading;
+
   const ActivityToolbar = () => (
     <Box
       sx={{
@@ -592,7 +631,11 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       </Tooltip>
 
       <Tooltip title={isScreenSharing ? "Stop Screen Share" : "Share Screen"}>
-        <IconButton onClick={toggleScreenShare} sx={{ color: "white" }}>
+        <IconButton
+          onClick={toggleScreenShare}
+          sx={{ color: "white" }}
+          disabled={isAnyDialogOpen}
+        >
           {isScreenSharing ? <StopScreenShare /> : <ScreenShare />}
         </IconButton>
       </Tooltip>
@@ -601,13 +644,18 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         <IconButton
           onClick={toggleCobrowsing}
           sx={{ color: isCobrowsing ? "lime" : "white" }}
+          disabled={isAnyDialogOpen}
         >
           <Cast />
         </IconButton>
       </Tooltip>
 
       <Tooltip title="Upload File">
-        <IconButton component="label" sx={{ color: "white" }}>
+        <IconButton
+          component="label"
+          sx={{ color: "white" }}
+          disabled={isAnyDialogOpen}
+        >
           <UploadFile onClick={() => setUploadDialogOpen(true)} />
         </IconButton>
       </Tooltip>
@@ -616,9 +664,11 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         <IconButton
           onClick={() => {
             fileInputRef.current.dataset.intent = "sign";
+            fileInputRef.current.setAttribute("accept", ".pdf,.jpg,.jpeg,.png"); // ← restrict for signing
             fileInputRef.current.click();
           }}
           sx={{ color: "white" }}
+          disabled={isAnyDialogOpen}
         >
           <Description />
         </IconButton>
@@ -635,9 +685,19 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const uploadFileAndSignal = async (file, type = "preview") => {
     if (!file) return;
 
+    const extension = file.name?.split(".").pop().toLowerCase();
+    const isImage = ["jpg", "jpeg", "png"].includes(extension);
+    const isPdf = extension === "pdf";
+
+    if (type === "sign" && !isPdf && !isImage) {
+      alert("Only PDF or image files (JPG, PNG) can be sent for signing.");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
 
+    setIsUploading(true); // ⬅️ START LOADER
     try {
       const res = await axios.post(`${backendUrl}/api/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -670,6 +730,8 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       );
     } catch (err) {
       console.error("File upload failed:", err);
+    } finally {
+      setIsUploading(false); // ⬅️ STOP LOADER
     }
   };
 
@@ -754,7 +816,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
               zIndex: 0,
             }}
           />
-          {!remoteVideoOn && renderFallbackAvatar("Customer")}
+          {!remoteVideoOn && renderFallbackAvatar(remoteUserName)}
           <Typography
             sx={{
               position: "absolute",
@@ -966,22 +1028,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                       }}
                     />
                   );
-                case "video":
-                  return (
-                    <video
-                      src={signedDocUrl}
-                      controls
-                      style={{ width: "100%", maxHeight: 600 }}
-                    />
-                  );
-                case "audio":
-                  return (
-                    <audio
-                      src={signedDocUrl}
-                      controls
-                      style={{ width: "100%" }}
-                    />
-                  );
                 case "pdf":
                   return (
                     <iframe
@@ -1021,6 +1067,14 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             Close
           </Button>
         </DialogActions>
+      </Dialog>
+
+      <Dialog open={isUploading} onClose={() => {}} disableEscapeKeyDown>
+        <DialogTitle>Uploading File...</DialogTitle>
+        <DialogContent sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <CircularProgress />
+          <Typography>Please wait while the file is being uploaded.</Typography>
+        </DialogContent>
       </Dialog>
     </Paper>
   );
