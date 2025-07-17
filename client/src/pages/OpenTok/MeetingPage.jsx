@@ -57,6 +57,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [signedDocDialogOpen, setSignedDocDialogOpen] = useState(false);
   const [isCobrowsing, setIsCobrowsing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [showCustomerLeftPopup, setShowCustomerLeftPopup] = useState(false);
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -163,6 +164,8 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
             webcamPublisher.on("streamCreated", (e) => {
               console.log("Publisher stream created:", e.stream);
+              // Mark customer as active
+              setShowCustomerLeftPopup(false);
               setLocalVideoOn(e.stream.hasVideo);
             });
           } catch (mediaErr) {
@@ -181,6 +184,9 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           setHasRemoteStream(true);
           setRemoteVideoOn(event.stream.hasVideo);
           setRemoteUserName(event.stream.name);
+
+          // Mark customer as active
+          setShowCustomerLeftPopup(false);
 
           const subscriber = session.subscribe(
             event.stream,
@@ -215,6 +221,9 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           console.log("Stream destroyed:", event.stream.streamId);
           setHasRemoteStream(false);
           setRemoteVideoOn(false);
+
+          // Mark customer as inactive and show popup
+          setShowCustomerLeftPopup(true);
         });
 
         session.on("signal", (event) => {
@@ -1075,6 +1084,24 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <CircularProgress />
           <Typography>Please wait while the file is being uploaded.</Typography>
         </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showCustomerLeftPopup}
+        onClose={() => setShowCustomerLeftPopup(false)}
+        aria-labelledby="customer-left-dialog-title"
+      >
+        <DialogTitle id="customer-left-dialog-title">
+          Customer Disconnected
+        </DialogTitle>
+        <DialogContent>
+          <Typography>The customer has left the session.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleEndCall} color="primary">
+            Close
+          </Button>
+        </DialogActions>
       </Dialog>
     </Paper>
   );

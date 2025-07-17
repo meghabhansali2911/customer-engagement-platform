@@ -42,6 +42,7 @@ const CustomerPage = () => {
   const [signatureModalOpen, setSignatureModalOpen] = useState(false);
   const [activeFeature, setActiveFeature] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [agentLeft, setAgentLeft] = useState(false);
 
   // Refs
   const fileInputRef = useRef(null);
@@ -479,6 +480,19 @@ const CustomerPage = () => {
       }
     };
 
+    const handleAgentStreamDestroyed = (event) => {
+      console.log("📴 Stream destroyed:", event.stream);
+      // This means agent's stream was removed
+      // You can add extra logic if multiple participants exist
+      setAgentLeft(true);
+    };
+
+    const handleAgentConnectionDestroyed = (event) => {
+      console.log("📴 Connection destroyed:", event.connection);
+      // Means agent disconnected
+      setAgentLeft(true);
+    };
+
     session.on("signal", signalHandler);
     session.on("signal:callAccepted", () => setWaitingForAgent(false));
     session.on("streamCreated", handleStreamCreated);
@@ -489,6 +503,8 @@ const CustomerPage = () => {
     session.on("signal:file-preview", handleFileUpload);
     session.on("signal:file-preview-closed", handleCloseFilePreviewDialog);
     session.on("signal:file-for-signing", handleSignaturePreview);
+    session.on("streamDestroyed", handleAgentStreamDestroyed);
+    session.on("connectionDestroyed", handleAgentConnectionDestroyed);
 
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
@@ -997,6 +1013,33 @@ const CustomerPage = () => {
                 Please wait while the file is being uploaded.
               </Typography>
             </DialogContent>
+          </Dialog>
+
+          <Dialog
+            open={agentLeft}
+            onClose={() => setAgentLeft(false)}
+            aria-labelledby="agent-left-dialog-title"
+            aria-describedby="agent-left-dialog-description"
+          >
+            <DialogTitle id="agent-left-dialog-title">Agent Left</DialogTitle>
+            <DialogContent>
+              <DialogContentText id="agent-left-dialog-description">
+                The agent has left the call.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                onClick={() => {
+                  setAgentLeft(false);
+                  window.location.reload(); // or navigate to home page, etc
+                }}
+                variant="contained"
+                color="primary"
+                autoFocus
+              >
+                Request New Call
+              </Button>
+            </DialogActions>
           </Dialog>
         </Box>
       </Paper>
