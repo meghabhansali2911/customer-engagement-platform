@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import OT from "@opentok/client";
 import SignatureCanvas from "react-signature-canvas";
 import axios from "axios";
 import { PDFDocument } from "pdf-lib";
+import CobrowseIO from "cobrowse-sdk-js";
 
 import {
   Box,
@@ -19,10 +20,9 @@ import {
 } from "@mui/material";
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const cobrowseLicenseKey = import.meta.env.VITE_COBROWSE_LICENSE_KEY;
 
 const CustomerPage = () => {
-  console.log("🔵 CustomerPage component initialized");
-
   // State Declarations
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -53,7 +53,6 @@ const CustomerPage = () => {
   const sigPadRef = useRef(null);
 
   const renderFallbackAvatar = (label = "You") => {
-    console.log("🔹 renderFallbackAvatar called with label:", label);
     return (
       <Box
         sx={{
@@ -88,8 +87,6 @@ const CustomerPage = () => {
 
   useEffect(() => {
     const initPublisher = async () => {
-      console.log("📽️ Attempting to initialize publisher...");
-
       const session = sessionRef.current;
       if (!session || !publisherRef.current || publisher.current) {
         return;
@@ -111,7 +108,6 @@ const CustomerPage = () => {
             setError("Could not access camera/mic.");
             return;
           }
-          console.log("✅ Publisher initialized.");
         }
       );
 
@@ -119,8 +115,6 @@ const CustomerPage = () => {
         if (err) {
           console.error("❌ Publishing failed:", err);
           setError("Publishing to session failed.");
-        } else {
-          console.log("✅ Published to session.");
         }
       });
 
@@ -131,14 +125,11 @@ const CustomerPage = () => {
     if (joined && !waitingForAgent && publisherRef.current) {
       initPublisher();
     }
-  }, [joined, waitingForAgent, publisherRef]);
+  }, [joined, waitingForAgent, publisherRef, name]);
 
   const handleJoin = async () => {
-    console.log("🔹 handleJoin started");
-
     if (!name.trim()) {
       setError("Please enter your name.");
-      console.log("⚠️ handleJoin aborted: name is empty");
       return;
     }
 
@@ -146,17 +137,14 @@ const CustomerPage = () => {
     setError("");
 
     try {
-      console.log("🎥 Requesting media permissions...");
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
       stream.getTracks().forEach((track) => track.stop());
-      console.log("🎥 Media permissions granted.");
 
       const res = await axios.post(`${backendUrl}/api/call-request`, { name });
       const { apiKey, sessionId, token } = res.data;
-      console.log("📡 Call request successful:", res.data);
 
       const session = OT.initSession(apiKey, sessionId);
       sessionRef.current = session;
@@ -164,29 +152,22 @@ const CustomerPage = () => {
       setJoined(true);
       setWaitingForAgent(true);
 
-      console.log("🔌 Connecting to session to wait for signals...");
       session.connect(token, (err) => {
         if (err) {
           console.error("❌ Session connect error (signal phase):", err);
           setError("Could not connect to session.");
           return;
         }
-        console.log(
-          "✅ Customer connected. Waiting for callAccepted signal..."
-        );
       });
     } catch (err) {
       console.error("❌ handleJoin error:", err);
       setError("Camera/Mic access denied or API error.");
     } finally {
       setCheckingDevices(false);
-      console.log("🔹 handleJoin ended");
     }
   };
 
-  const handleCallAccepted = async () => {
-    console.log("🔹 handleCallAccepted started");
-
+  const handleCallAccepted = useCallback(async () => {
     if (publisher.current) {
       console.warn("⚠️ Publisher already initialized. Skipping.");
       return;
@@ -222,7 +203,6 @@ const CustomerPage = () => {
           setError("Could not access camera/mic.");
           return;
         }
-        console.log("✅ Publisher initialized.");
       }
     );
 
@@ -236,22 +216,17 @@ const CustomerPage = () => {
       if (err) {
         console.error("❌ Publishing failed:", err);
         setError("Publishing to session failed.");
-      } else {
-        console.log("✅ Published to session.");
       }
     });
 
     publisher.current.on("videoEnabled", () => {
-      console.log("🎥 Publisher video enabled");
       setPublisherHasVideo(true);
     });
+
     publisher.current.on("videoDisabled", () => {
-      console.log("📵 Publisher video disabled");
       setPublisherHasVideo(false);
     });
-
-    console.log("🔹 handleCallAccepted ended");
-  };
+  }, [name, setError, setWaitingForAgent, setPublisherHasVideo]);
 
   const handleSendSignedDocument = async (signatureDataUrl) => {
     if (!sessionRef.current || !signatureDocUrl || !signatureDocName) {
@@ -352,7 +327,6 @@ const CustomerPage = () => {
             console.error("Signal error:", err);
             setError("Failed to send signed document.");
           } else {
-            console.log("✅ Signed document shared:", signalData);
             setSignatureModalOpen(false);
             setSignatureDocUrl(null);
             setSignatureDocName(null);
@@ -366,7 +340,6 @@ const CustomerPage = () => {
   };
 
   const handleCloseFilePreviewDialog = () => {
-    console.log("🔐 File dialog closed");
     setShowUploadedDialog(false);
     setFilePreviewUrl(null);
   };
@@ -390,12 +363,10 @@ const CustomerPage = () => {
   };
 
   useEffect(() => {
-    console.log("🟢 useEffect (token) started");
     const session = sessionRef.current;
     if (!session) return;
 
     const handleStreamCreated = (event) => {
-      console.log("✅ Stream created:", event.stream);
       const subscriber = session.subscribe(
         event.stream,
         subscriberRef.current,
@@ -410,11 +381,9 @@ const CustomerPage = () => {
       );
 
       subscriber.on("videoEnabled", () => {
-        console.log("🎥 Subscriber video enabled");
         setSubscriberHasVideo(true);
       });
       subscriber.on("videoDisabled", () => {
-        console.log("📵 Subscriber video disabled");
         setSubscriberHasVideo(false);
       });
 
@@ -422,18 +391,11 @@ const CustomerPage = () => {
     };
 
     const handleEndCall = () => {
-      console.log("📴 End call signal received");
       session.disconnect();
       setCallEnded(true);
     };
 
-    const signalHandler = (event) => {
-      console.log("📡 Received signal:", event.type, event.data);
-    };
-
     const handleFileUpload = (event) => {
-      console.log("📡 Received signal:", event.type, event.data);
-
       if (
         event.type === "signal:file-share" ||
         event.type === "signal:file-preview"
@@ -449,27 +411,22 @@ const CustomerPage = () => {
       }
 
       if (event.type === "signal:file-request") {
-        console.log("📥 Agent requested file upload");
         setFileUploadRequested(true);
       }
     };
 
     const handleVideoAssist = (event) => {
-      console.log("📡 Received video assist signal:", event.data);
       const data = event.data;
       if (data === "enable-video") {
-        console.log("📡 Received video assist signal enabled");
         setSubscriberHasVideo(false);
         setActiveFeature("Video Assist");
       } else {
-        console.log("📡 Received video assist signal disabled");
         setActiveFeature("");
         setSubscriberHasVideo(true);
       }
     };
 
     const handleSignaturePreview = (event) => {
-      console.log("📡 Received file-for-signing signal:", event.data);
       try {
         const parsed = JSON.parse(event.data);
         setSignatureDocUrl(parsed.url);
@@ -480,20 +437,47 @@ const CustomerPage = () => {
       }
     };
 
-    const handleAgentStreamDestroyed = (event) => {
-      console.log("📴 Stream destroyed:", event.stream);
-      // This means agent's stream was removed
-      // You can add extra logic if multiple participants exist
+    const handleAgentStreamDestroyed = () => {
       setAgentLeft(true);
     };
 
-    const handleAgentConnectionDestroyed = (event) => {
-      console.log("📴 Connection destroyed:", event.connection);
-      // Means agent disconnected
+    const handleAgentConnectionDestroyed = () => {
       setAgentLeft(true);
     };
 
-    session.on("signal", signalHandler);
+    const handleCobrowsingSignal = async () => {
+      try {
+        const res = await axios.post(`${backendUrl}/api/cobrowse-token`);
+        const token = res.data?.token;
+
+        CobrowseIO.license = cobrowseLicenseKey;
+        CobrowseIO.debug = true;
+        await CobrowseIO.client();
+
+        CobrowseIO.start({ allowIFrameStart: true });
+
+        const session = await CobrowseIO.createSession();
+        const sessionId = session.id();
+        const sessionUrl = `https://cobrowse.io/session/${sessionId}/?token=${token}&end_action=none&navigation=none&messages=none`;
+
+        if (sessionUrl) {
+          sessionRef.current?.signal(
+            {
+              type: "cobrowsing-url",
+              data: JSON.stringify({ action: "start", sessionUrl }),
+            },
+            (err) => {
+              if (err) {
+                console.error("❌ Signal error:", err);
+              }
+            }
+          );
+        }
+      } catch (error) {
+        console.error("❌ Failed to parse cobrowsing signal:", error);
+      }
+    };
+
     session.on("signal:callAccepted", () => setWaitingForAgent(false));
     session.on("streamCreated", handleStreamCreated);
     session.on("signal:endCall", handleEndCall);
@@ -505,12 +489,10 @@ const CustomerPage = () => {
     session.on("signal:file-for-signing", handleSignaturePreview);
     session.on("streamDestroyed", handleAgentStreamDestroyed);
     session.on("connectionDestroyed", handleAgentConnectionDestroyed);
-
+    session.on("signal:request-cobrowsing-url", handleCobrowsingSignal);
     session.on("exception", (e) => console.error("⚠️ OpenTok exception:", e));
 
     return () => {
-      console.log("🧹 Cleanup for useEffect (token)");
-      session.off("signal", signalHandler);
       session.off("signal:callAccepted", handleCallAccepted);
       session.off("signal:video-assist", handleVideoAssist);
       session.off("signal:file-request", handleFileUpload);
@@ -521,10 +503,10 @@ const CustomerPage = () => {
 
       if (publisher.current) {
         publisher.current.destroy();
-        console.log("🗑️ Publisher destroyed");
+        CobrowseIO.stop();
       }
     };
-  }, [token]);
+  }, [token, handleCallAccepted, name]);
 
   const uploadAndShareFile = async ({
     file,
@@ -546,7 +528,6 @@ const CustomerPage = () => {
     setIsUploading(true); // Show loader
 
     try {
-      console.log("📤 Uploading file to backend...");
       const res = await axios.post(`${backendUrl}/api/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -567,7 +548,6 @@ const CustomerPage = () => {
             console.error("❌ File signal send error:", err);
             setError("Failed to share file.");
           } else {
-            console.log("📡 File shared via signal:", fileData);
             setFilePreviewUrl(res.data.url);
             setShowUploadedDialog(true);
           }
@@ -583,22 +563,17 @@ const CustomerPage = () => {
   };
 
   useEffect(() => {
-    console.log("🟡 useEffect (componentWillUnmount) started");
     return () => {
-      console.log("🧹 useEffect (componentWillUnmount) cleanup running...");
       if (sessionRef.current) {
         sessionRef.current.disconnect();
-        console.log("🔌 Session disconnected");
       }
       if (publisher.current) {
         publisher.current.destroy();
-        console.log("🗑️ Publisher destroyed");
       }
     };
   }, []);
 
   if (callEnded) {
-    console.log("📴 Rendering call ended screen");
     return (
       <Box
         sx={{
@@ -627,7 +602,6 @@ const CustomerPage = () => {
   }
 
   if (!joined) {
-    console.log("👋 Rendering join screen");
     return (
       <Box
         sx={{
@@ -696,7 +670,6 @@ const CustomerPage = () => {
   }
 
   if (joined && waitingForAgent) {
-    console.log("⏳ Rendering waiting for agent screen");
     return (
       <Box
         sx={{

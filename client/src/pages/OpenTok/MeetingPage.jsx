@@ -30,6 +30,7 @@ import {
 } from "@mui/icons-material";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
 import { Document, Page, pdfjs } from "react-pdf";
+
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
@@ -55,9 +56,11 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   const [signedDocUrl, setSignedDocUrl] = useState(null);
   const [signedDocName, setSignedDocName] = useState(null);
   const [signedDocDialogOpen, setSignedDocDialogOpen] = useState(false);
-  const [isCobrowsing, setIsCobrowsing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showCustomerLeftPopup, setShowCustomerLeftPopup] = useState(false);
+  const [isCobrowsing, setIsCobrowsing] = useState(false);
+  const [openCoBrowseDialog, setOpenCoBrowseDialog] = useState(false);
+  const [coBrowseUrl, setCoBrowseUrl] = useState("");
 
   const fileInputRef = useRef(null);
   const sessionRef = useRef(null);
@@ -85,7 +88,7 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
     async function initSession() {
       try {
-        const res = await axios.post(`${backendUrl}/api/token`, {
+        const res = await axios.post(`${backendUrl}/api/opentok-token`, {
           sessionId,
           userType: "publisher",
           userData: { name: "Agent" },
@@ -137,7 +140,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
               (pubErr) => {
                 if (pubErr) {
                   console.error("Publisher init error:", pubErr);
-                  console.log("Failed to initialize publisher");
                 } else {
                   webcamPublisherRef.current = webcamPublisher;
                   publisherRef.current = webcamPublisher;
@@ -145,7 +147,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
                   session.publish(webcamPublisher, (pubErr2) => {
                     if (pubErr2) {
                       console.error("Publish error:", pubErr2);
-                      console.log("Failed to publish stream");
                     }
                   });
 
@@ -163,24 +164,18 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             );
 
             webcamPublisher.on("streamCreated", (e) => {
-              console.log("Publisher stream created:", e.stream);
-              // Mark customer as active
               setShowCustomerLeftPopup(false);
               setLocalVideoOn(e.stream.hasVideo);
             });
           } catch (mediaErr) {
             console.error("Media error:", mediaErr);
             if (mediaErr.name === "NotReadableError") {
-              console.log("Camera or microphone is in use by another app.");
               setRetryMedia(true);
-            } else {
-              console.log(`Could not access media: ${mediaErr.message}`);
             }
           }
         });
 
         session.on("streamCreated", (event) => {
-          console.log("New stream created:", event.stream);
           setHasRemoteStream(true);
           setRemoteVideoOn(event.stream.hasVideo);
           setRemoteUserName(event.stream.name);
@@ -199,35 +194,25 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
             (err) => {
               if (err) {
                 console.error("Subscribe error:", err);
-                console.log("Failed to subscribe to customer stream");
-              } else {
-                console.log("Subscribed to customer stream successfully");
               }
             }
           );
 
           subscriber.on("videoEnabled", () => {
-            console.log("Customer video enabled");
             setRemoteVideoOn(true);
           });
 
           subscriber.on("videoDisabled", () => {
-            console.log("Customer video disabled");
             setRemoteVideoOn(false);
           });
         });
 
-        session.on("streamDestroyed", (event) => {
-          console.log("Stream destroyed:", event.stream.streamId);
+        session.on("streamDestroyed", () => {
           setHasRemoteStream(false);
           setRemoteVideoOn(false);
 
           // Mark customer as inactive and show popup
           setShowCustomerLeftPopup(true);
-        });
-
-        session.on("signal", (event) => {
-          console.log("📡 Received signal:", event.type, event.data);
         });
 
         session.on("signal:file-share", (event) => {
@@ -246,7 +231,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
         session.on("signal:signed-document", (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log("Signed document received:", data);
             if (data.url) {
               setSignedDocUrl(data.url);
               setSignedDocName(data.name || "Signed Document");
@@ -258,18 +242,19 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           }
         });
 
-        session.on("signal:cobrowse-click", (event) => {
+        session.on("signal:cobrowsing-url", (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log("🖱️ Received customer click:", data);
-            // Optionally highlight or process the click (e.g., visually indicate on agent's screen)
+            const url = data.sessionUrl;
+            setCoBrowseUrl(url);
+            setOpenCoBrowseDialog(true);
+            setIsCobrowsing(true);
           } catch (err) {
-            console.error("❌ Failed to parse cobrowse-click signal:", err);
+            console.error("Failed to parse cobrowsing-url signal:", err);
           }
         });
       } catch (err) {
         console.error(err);
-        if (isMounted) console.log("Failed to initialize session");
       }
     }
 
@@ -278,6 +263,13 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
     return () => {
       isMounted = false;
       if (sessionRef.current) {
+        sessionRef.current.off("streamCreated");
+        sessionRef.current.off("streamDestroyed");
+        sessionRef.current.off("signal");
+        sessionRef.current.off("signal:file-share");
+        sessionRef.current.off("signal:signed-document");
+        sessionRef.current.off("signal:cobrowsing-url");
+
         if (publisherRef.current) {
           sessionRef.current.unpublish(publisherRef.current);
           publisherRef.current.destroy();
@@ -290,8 +282,25 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
   // Start or stop co-browsing
   const toggleCobrowsing = async () => {
-    alert("Co browser feature");
-    setIsCobrowsing(true);
+    if (isCobrowsing) {
+      setIsCobrowsing(false);
+      setCoBrowseUrl("");
+      setOpenCoBrowseDialog(false);
+    } else {
+      sessionRef.current?.signal(
+        {
+          type: "request-cobrowsing-url",
+        },
+        (err) => {
+          if (err) {
+            console.error("❌ Signal error:", err);
+            setIsCobrowsing(false);
+            setCoBrowseUrl("");
+            setOpenCoBrowseDialog(false);
+          }
+        }
+      );
+    }
   };
 
   const toggleVideo = async () => {
@@ -308,7 +317,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       setLocalVideoOn(!localVideoOn);
     } catch (err) {
       console.error("Video toggle failed:", err);
-      console.log("Failed to toggle video");
     }
   };
 
@@ -321,7 +329,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       setLocalAudioOn(!localAudioOn);
     } catch (err) {
       console.error("Audio toggle failed:", err);
-      console.log("Failed to toggle audio");
     }
   };
 
@@ -414,8 +421,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
 
           // Listen for user manually stopping screen share
           screenPublisher.on("mediaStopped", () => {
-            console.log("Screen sharing stopped by user");
-
             if (sessionRef.current && screenPublisherRef.current) {
               sessionRef.current.unpublish(screenPublisherRef.current);
               screenPublisherRef.current.destroy();
@@ -462,19 +467,14 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
       (err) => {
         if (err) {
           console.error("Signal error:", err);
-          console.log("Failed to send video assist signal");
         } else {
           setVideoAssistActive(nextState);
-          console.log(
-            `📡 Sent 'video-assist' signal: ${nextState ? "enable" : "disable"}`
-          );
         }
       }
     );
   };
 
   const handleEndCall = async () => {
-    console.log("Ending call...");
     if (sessionRef.current) {
       sessionRef.current.signal(
         { type: "endCall", data: "Agent ended the call" },
@@ -489,8 +489,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
   };
 
   const handleCloseFileDialog = () => {
-    console.log("File dialog closed");
-
     sessionRef.current?.signal(
       {
         type: "file-preview-closed",
@@ -1022,7 +1020,6 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           {signedDocUrl ? (
             (() => {
               const fileType = getFileType(signedDocUrl, signedDocName);
-              console.log("🚀 ~ MeetingPage ~ fileType:", fileType);
 
               switch (fileType) {
                 case "image":
@@ -1101,6 +1098,27 @@ const MeetingPage = ({ sessionId, onCallEnd }) => {
           <Button onClick={handleEndCall} color="primary">
             Close
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={openCoBrowseDialog}
+        onClose={toggleCobrowsing}
+        fullWidth
+        maxWidth="lg"
+      >
+        <DialogTitle>Cobrowse Session</DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <iframe
+            src={coBrowseUrl}
+            width="100%"
+            height="600px"
+            style={{ border: "none" }}
+            title="Cobrowse Session"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={toggleCobrowsing}>Close</Button>
         </DialogActions>
       </Dialog>
     </Paper>
